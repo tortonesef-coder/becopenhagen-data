@@ -51,6 +51,7 @@ function showApp() {
   $('#app').hidden = false;
   loadFreshness();
   loadDefinitions();
+  loadDoubtCount();
 }
 
 // ── Freshness chip ─────────────────────────────────────────────────────────
@@ -65,6 +66,15 @@ async function loadFreshness() {
     chip.textContent = `Data as of ${String(f.loaded_at).slice(0, 16)} UTC (${ago})`;
     chip.classList.toggle('stale', !!f.stale);
   } catch { /* the chip is not worth an error message */ }
+}
+
+async function loadDoubtCount() {
+  try {
+    const { counts } = await api('/api/doubts');
+    const badge = $('#doubt-count');
+    if (Number(counts.open) > 0) { badge.textContent = counts.open; badge.hidden = false; }
+    else badge.hidden = true;
+  } catch { /* the badge is not worth an error */ }
 }
 
 async function loadDefinitions() {
@@ -435,6 +445,8 @@ async function renderTab(tab) {
         if (d.do_not_use) card.appendChild(el('div', 'donot', 'Do not: ' + d.do_not_use));
         pane.appendChild(card);
       }
+    } else if (tab === 'doubts') {
+      await renderDoubts(pane);
     } else if (tab === 'gaps') {
       const rows = await api('/api/gaps');
       pane.innerHTML = '';
@@ -599,6 +611,120 @@ async function renderPendingUploads(pane) {
   pane.appendChild(el('p', 'muted small', `${pending.length} uploaded file(s) waiting for a decision:`));
   for (const r of pending) {
     pane.appendChild(proposalCard({ ...r, columns: [], usable: true, cost_dkk: r.classify_cost_dkk }));
+  }
+}
+
+// ── Doubts ─────────────────────────────────────────────────────────────────
+// Fede asked for "atomic nuggets of doubt, which I can confirm or deny, check
+// mark or big X". One card at a time on purpose: a list of 207 questions is a
+// wall nobody starts, one question with two buttons is a decision.
+//
+// Ordered by what a wrong answer would cost, not by how unsure the model is.
+// Money and the queries the tool trusts verbatim come first; column wording
+// comes last.
+async function renderDoubts(pane) {
+  pane.innerHTML = '<div class="loading">Loading…</div>';
+  let data;
+  try { data = await api('/api/doubts'); }
+  catch (e) { pane.innerHTML = ''; pane.appendChild(Object.assign(el('div','error'),{textContent:e.message})); return; }
+
+  state.doubtQueue = data.queue;
+  state.doubtIndex = 0;
+  pane.innerHTML = '';
+
+  const head = el('div', 'doubt-head');
+  head.appendChild(el('p', 'muted small',
+    'Everything the models are unsure about, one question at a time. ' +
+    'A tick marks it checked; a cross records why it was wrong and feeds that back in. ' +
+    'Ordered by what a wrong answer would cost.'));
+  const tally = el('p', 'muted small');
+  tally.id = 'doubt-tally';
+  head.appendChild(tally);
+  pane.appendChild(head);
+
+  const kinds = el('div', 'doubt-kinds');
+  for (const k of data.by_kind) {
+    kinds.appendChild(Object.assign(el('span', 'badge'),
+      { textContent: `${k.n} ${k.kind.replace(/_/g, ' ')}` }));
+  }
+  pane.appendChild(kinds);
+
+  const slot = el('div');
+  slot.id = 'doubt-slot';
+  pane.appendChild(slot);
+  showDoubt(data.counts);
+}
+
+function showDoubt(counts) {
+  const slot = $('#doubt-slot');
+  const tally = $('#doubt-tally');
+  if (!slot) return;
+  slot.innerHTML = '';
+
+  const d = state.doubtQueue[state.doubtIndex];
+  if (!d) {
+    slot.appendChild(Object.assign(el('div', 'card'), {
+      textContent: state.doubtQueue.length
+        ? 'That is the batch done. Reload for the next fifty.'
+        : 'Nothing to check right now.',
+    }));
+    return;
+  }
+
+  if (tally && counts) {
+    tally.textContent = `${counts.open} open, ${counts.confirmed} confirmed, ` +
+      `${counts.denied} corrected, ${counts.skipped} skipped.`;
+  }
+
+  const card = el('div', 'card doubt');
+  const kind = el('div', 'doubt-kind');
+  kind.appendChild(Object.assign(el('span', 'badge' + (d.priority <= 2 ? ' amber' : '')),
+    { textContent: d.kind.replace(/_/g, ' ') }));
+  kind.appendChild(Object.assign(el('span', 'key'), { textContent: d.subject }));
+  card.appendChild(kind);
+
+  card.appendChild(el('h3', null, d.question));
+  if (d.detail) {
+    const pre = el('pre', 'doubt-detail');
+    pre.textContent = d.detail;
+    card.appendChild(pre);
+  }
+  if (d.impact) card.appendChild(el('p', 'doubt-impact', d.impact));
+
+  const note = el('textarea');
+  note.className = 'doubt-note';
+  note.rows = 2;
+  note.placeholder = 'If it is wrong, what is the right answer? (optional, but this is the bit that teaches it)';
+  card.appendChild(note);
+
+  const row = el('div', 'budget-actions');
+  const yes = el('button', 'doubt-yes', '\u2713  Correct');
+  const no = el('button', 'doubt-no', '\u2717  Wrong');
+  const skip = el('button', 'budget-stop', 'Skip');
+  yes.addEventListener('click', () => decideDoubt(d.doubt_id, 'confirmed', note.value));
+  no.addEventListener('click', () => decideDoubt(d.doubt_id, 'denied', note.value));
+  skip.addEventListener('click', () => decideDoubt(d.doubt_id, 'skipped', note.value));
+  row.appendChild(yes); row.appendChild(no); row.appendChild(skip);
+  card.appendChild(row);
+
+  const pos = el('p', 'muted small', `${state.doubtIndex + 1} of ${state.doubtQueue.length} in this batch`);
+  card.appendChild(pos);
+  slot.appendChild(card);
+}
+
+async function decideDoubt(id, decision, note) {
+  const slot = $('#doubt-slot');
+  slot.innerHTML = '<div class="loading">Saving…</div>';
+  try {
+    const out = await api(`/api/doubts/${id}/decide`, { method: 'POST', body: { decision, note: note || null } });
+    state.doubtIndex++;
+    showDoubt({ open: out.open, confirmed: '', denied: '', skipped: '' });
+    const tally = $('#doubt-tally');
+    if (tally) tally.textContent = `${out.open} left to check.`;
+    loadDoubtCount();
+  } catch (e) {
+    slot.innerHTML = '';
+    slot.appendChild(Object.assign(el('div', 'error'), { textContent: e.message }));
   }
 }
 

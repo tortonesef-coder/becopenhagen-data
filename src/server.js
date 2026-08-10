@@ -293,6 +293,75 @@ app.get('/api/gaps', requireAuth, async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Doubts ──────────────────────────────────────────────────────────────────
+// One queue over everything the models are unsure about. Confirming must
+// actually mark the thing reviewed, or this is a to-do list rather than a
+// review system and the same doubt returns tomorrow.
+app.get('/api/doubts', requireAuth, async (_req, res) => {
+  try {
+    const rows = await db.catalog(`
+      SELECT doubt_id, kind, subject, question, detail, proposed, impact, priority
+      FROM catalog.doubts WHERE status = 'open'
+      ORDER BY priority, kind, subject LIMIT 50`);
+    const [counts] = await db.catalog(`
+      SELECT COUNT(*) FILTER (WHERE status='open')      AS open,
+             COUNT(*) FILTER (WHERE status='confirmed') AS confirmed,
+             COUNT(*) FILTER (WHERE status='denied')    AS denied,
+             COUNT(*) FILTER (WHERE status='skipped')   AS skipped
+      FROM catalog.doubts`);
+    const byKind = await db.catalog(`
+      SELECT kind, COUNT(*) AS n FROM catalog.doubts WHERE status='open'
+      GROUP BY 1 ORDER BY MIN(priority), n DESC`);
+    res.json({ queue: rows, counts, by_kind: byKind });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/doubts/:id/decide', requireAuth, async (req, res) => {
+  const id = String(req.params.id);
+  const decision = ['confirmed', 'denied', 'skipped'].includes(req.body?.decision)
+    ? req.body.decision : null;
+  if (!decision) return res.status(400).json({ error: 'Decision must be confirmed, denied or skipped.' });
+
+  const [d] = await db.catalog(`SELECT * FROM catalog.doubts WHERE doubt_id = ${db.esc(id)}`);
+  if (!d) return res.status(404).json({ error: 'No such doubt.' });
+
+  const note = req.body?.note ? String(req.body.note).slice(0, 4000) : null;
+
+  try {
+    // Confirming runs the write-back, so the thing is genuinely marked reviewed
+    // rather than just ticked off a list.
+    if (decision === 'confirmed' && d.writeback_sql) {
+      await db.catalogWrite(String(d.writeback_sql).replace(/\{user\}/g, db.esc(req.session.username)) + ';');
+    }
+
+    await db.catalogWrite(`
+      UPDATE catalog.doubts SET status = ${db.esc(decision)},
+        decided_by = ${db.esc(req.session.username)}, decided_at = now(),
+        note = ${db.esc(note)}
+      WHERE doubt_id = ${db.esc(id)};`);
+
+    // A DENIAL is the valuable half: the model believed something, a person
+    // said no, and the reason exists nowhere else. It becomes a correction,
+    // which feeds the prompt, so the same mistake is not made again.
+    if (decision === 'denied') {
+      await db.logCorrection({
+        said_by: req.session.username,
+        correction: note || `Denied: ${d.question}`,
+        context: `Doubt ${d.kind} on ${d.subject}. The model believed: ${String(d.proposed || '').slice(0, 500)}`,
+        applies_to: d.subject,
+      });
+      await context.reload();
+    }
+
+    const [counts] = await db.catalog(
+      `SELECT COUNT(*) FILTER (WHERE status='open') AS open FROM catalog.doubts`);
+    res.json({ ok: true, status: decision, open: counts.open });
+  } catch (e) {
+    console.error('[doubts]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/freshness', requireAuth, async (_req, res) => {
   try { res.json(await agent.freshness()); }
   catch (e) { res.status(500).json({ error: e.message }); }

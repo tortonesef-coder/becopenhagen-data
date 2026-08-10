@@ -124,6 +124,31 @@ RATES ARE NOT UNIFORM: four guides bill 250 DKK/h, Paloma bills 130 and 150 DKK/
 hours_claimed is what the GUIDE claimed, which is not the same as bc.guide_hours, which is what the fleet app computed. Comparing the two is a real check, not an error.',
  'fede'),
 
+('catalog.doubts', 'Doubts queue', 'catalog', 'raw',
+ 'Everything the models are unsure about, as one queue of yes-or-no questions.',
+ 'One row per open question.',
+ NULL, 'auto', 'node scripts/generate-doubts.js regenerates it. Already-decided doubts are never recreated.',
+ 'Ordered by what a WRONG ANSWER WOULD COST, not by how uncertain the model is. Money and the queries the tool trusts verbatim are priority 1 and 2; column wording is 6 to 8.
+Confirming runs writeback_sql, which is what actually marks the underlying thing reviewed. A doubt confirmed without a writeback is a note, not a review.
+A DENIAL is the valuable half: it becomes a catalog.corrections row and feeds the prompt, so the same mistake is not repeated.',
+ 'fede'),
+
+('catalog.business_facts', 'Business facts', 'catalog', 'raw',
+ 'Hand-curated facts about the business, lifted from bc-brain''s context.md, with the verification tagging carried through.',
+ 'One row per fact.',
+ NULL, 'manual', 'Edited by hand. The source is /var/www/becopenhagen-fleet/brain/context.md.',
+ 'verified reflects the tagging in the SOURCE document, not confirmation here. confirmed_by is who confirmed it in this tool, and is NULL on everything until somebody works the Doubts queue.
+THE COMMISSION RATES ARE UNVERIFIED. Every other fact line in the source file is tagged (verified); the commission line carries no tag at all, so by that file''s own convention nobody has confirmed it. It is in catalog.channel_commission and the agent must say it is unconfirmed whenever it uses it.',
+ 'fede'),
+
+('catalog.channel_commission', 'Commission by channel', 'catalog', 'raw',
+ 'What each sales channel is believed to take in commission.',
+ 'One row per channel.',
+ NULL, 'manual', 'Edited by hand alongside catalog.business_facts.',
+ 'UNCONFIRMED. These rates came from an untagged line in bc-brain''s context.md and are queued as doubts for Fede.
+Applying them to gross revenue gives an ESTIMATE using contracted rates, never the actual commission charged, which is gap ota_commission_actual and lives in the FareHarbor sales report. Say which one you are giving.',
+ 'fede'),
+
 ('catalog.uploads', 'Uploaded files', 'catalog', 'raw',
  'Every file uploaded on the Sources page, what the classifier made of it, and whether a person accepted it.',
  'One row per uploaded file.',

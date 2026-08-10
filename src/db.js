@@ -73,7 +73,31 @@ async function catalog(sql, opts = {}) {
  * app change".
  */
 async function catalogWrite(sql) {
+  // Anything past a couple of hundred KB blows the OS argv limit and comes back
+  // as a bare "spawn E2BIG", which is a baffling error for what is really "your
+  // statement is long". Route big writes through a temp file instead. Hit for
+  // real generating 207 doubt rows.
+  if (Buffer.byteLength(sql) > 100_000) return catalogWriteBig(sql);
   return run(CATALOG, sql, { readOnly: false, timeout: 15000 });
+}
+
+/** Same as catalogWrite, for statements too long to pass as an argument. */
+async function catalogWriteBig(sql) {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const tmp = path.join(os.tmpdir(), `bcdata-${process.pid}-${Date.now()}.sql`);
+  fs.writeFileSync(tmp, sql);
+  try {
+    await execFileAsync('/bin/sh', ['-c',
+      `${DUCKDB} ${JSON.stringify(CATALOG)} < ${JSON.stringify(tmp)}`],
+      { encoding: 'utf8', maxBuffer: MAX_BUFFER, timeout: 60000 });
+    return [];
+  } catch (e) {
+    throw new QueryError((e.stderr || e.message || '').trim().split('\n').slice(0, 4).join(' '), 'sql');
+  } finally {
+    fs.unlinkSync(tmp);
+  }
 }
 
 function esc(v) {
@@ -134,5 +158,6 @@ async function logCorrection({ said_by, correction, context, query_log_id, appli
 module.exports = {
   warehouse, catalog, catalogWrite, runSql,
   logQuery, logGapHit, logCorrection,
+  catalogWriteBig,
   esc, QueryError, ROW_CAP, QUERY_TIMEOUT_MS, WAREHOUSE, CATALOG,
 };

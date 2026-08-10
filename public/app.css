@@ -218,3 +218,36 @@ details.sql .purpose { color: var(--muted); padding: .4rem .65rem 0; }
 .card.proposal { border-left: 3px solid var(--accent); }
 .card.proposal .budget-actions { margin-top: .8rem; }
 .muted.done { color: var(--accent); font-weight: 600; }
+
+/* ── Doubts ─────────────────────────────────────────────────────────────── */
+/* One card at a time. A list of 207 questions is a wall nobody starts; one
+   question with two buttons is a decision. */
+.doubt-kinds { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .9rem; }
+.card.doubt { border-left: 3px solid var(--accent); }
+.doubt-kind { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
+.card.doubt h3 { font-size: 1.05rem; margin: 0 0 .6rem; line-height: 1.4; }
+.doubt-detail {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: .6rem .7rem; margin: 0 0 .7rem; font-size: .84rem; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word; max-height: 22rem; overflow-y: auto;
+  font-family: var(--mono);
+}
+.doubt-impact {
+  font-size: .87rem; color: var(--muted); border-left: 2px solid var(--line);
+  padding-left: .6rem; margin: 0 0 .8rem;
+}
+.doubt-note {
+  width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: .5rem .6rem;
+  font: inherit; font-size: .9rem; resize: vertical; margin-bottom: .8rem;
+  background: #fff; color: var(--ink);
+}
+.doubt-note:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+.doubt-yes, .doubt-no {
+  border: 0; border-radius: 8px; padding: .5rem 1.1rem;
+  font-size: .95rem; font-weight: 600; cursor: pointer;
+}
+.doubt-yes { background: var(--accent); color: #fff; }
+.doubt-yes:hover { filter: brightness(1.08); }
+.doubt-no { background: var(--red-soft); color: var(--red); }
+.doubt-no:hover { background: var(--red); color: #fff; }
+.tab .badge { margin-left: .3rem; background: var(--amber-soft); color: var(--amber); }

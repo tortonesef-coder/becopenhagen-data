@@ -210,6 +210,33 @@ async function gapsBlock() {
   return out;
 }
 
+/**
+ * Hand-curated business facts, with their verification status carried through.
+ *
+ * The source file tags each line (verified) or not, and that tagging is the
+ * point: an unconfirmed fact must not reach the agent looking like a confirmed
+ * one. The commission rates are the live example, and they are the only
+ * untagged line in that file.
+ */
+async function factsBlock() {
+  const rows = await db.catalog(
+    `SELECT fact, verified, confirmed_by FROM catalog.business_facts ORDER BY verified DESC, fact_key`)
+    .catch(() => []);
+  if (!rows.length) return '';
+  let out = '# Business facts\n\nTold to us by the people who run the business.\n';
+  const conf = rows.filter(r => r.verified);
+  const unconf = rows.filter(r => !r.verified);
+  if (conf.length) {
+    out += '\n## Confirmed\n';
+    for (const r of conf) out += `\n- ${String(r.fact).replace(/\s+/g, ' ')}`;
+  }
+  if (unconf.length) {
+    out += '\n\n## NOT confirmed by anybody\n\nYou may use these, but you MUST say they are unconfirmed whenever you do.\n';
+    for (const r of unconf) out += `\n- ${String(r.fact).replace(/\s+/g, ' ')}`;
+  }
+  return out + '\n';
+}
+
 async function correctionsBlock() {
   // Things the users have said that exist in no database. This is knowledge
   // that would otherwise have died in a chat window.
@@ -227,10 +254,10 @@ async function correctionsBlock() {
 
 /** Builds the full static block. Called once at boot and on reload(). */
 async function build() {
-  const [schema, defs, limits, gaps, corrections] = await Promise.all([
-    schemaSummary(), definitionsBlock(), limitsBlock(), gapsBlock(), correctionsBlock(),
+  const [schema, defs, limits, gaps, facts, corrections] = await Promise.all([
+    schemaSummary(), definitionsBlock(), limitsBlock(), gapsBlock(), factsBlock(), correctionsBlock(),
   ]);
-  cached = [BUSINESS, defs, schema, limits, gaps, corrections, BEHAVIOUR]
+  cached = [BUSINESS, defs, schema, limits, gaps, facts, corrections, BEHAVIOUR]
     .filter(Boolean).join('\n\n---\n\n');
   return cached;
 }

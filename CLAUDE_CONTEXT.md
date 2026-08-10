@@ -711,6 +711,85 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, the Doubts queue, and where the upload idea has to stop
+
+DNS is live: data.becopenhagen.dk resolves to this VPS, HTTPS valid, all four
+apps healthy. API credit topped up with auto-reload.
+
+**The Doubts queue is built, and it is a better idea than the phase 4 it
+replaces.** Fede: "there should probably be a section of the app where all the
+doubts of the models are listed, like atomic nuggets of doubts, which I can
+confirm or deny, check mark or big X."
+
+Uncertainty was already being recorded honestly all over the catalog: 134 column
+descriptions with `reviewed_by` NULL, 20 canonical queries with `verified_by`
+NULL, 7 invoice figures read by a model and checked by nobody, 13 assertion
+bounds measured off six weeks, 33 gap effort estimates the amendment itself says
+Fede should review. All true, all invisible unless you went table by table.
+`catalog.doubts` is one queue over all of it. **216 open.**
+
+Three things make it work rather than being a to-do list:
+
+- **`writeback_sql`.** Confirming actually marks the underlying thing reviewed.
+  Without it the description stays unreviewed and the same doubt returns
+  tomorrow.
+- **Ranked by what a wrong answer would COST, not by how uncertain the model
+  is.** Money and the queries the agent trusts verbatim are priority 1 and 2;
+  column wording is 6 to 8. Nobody works through 216 questions, so the order is
+  the feature.
+- **A denial becomes a `catalog.corrections` row** and feeds the prompt, so the
+  same mistake is not repeated. The denial is the valuable half.
+
+This effectively supersedes the SHAPE of phase 4. The spec had one audit session
+verifying twenty queries; a queue does the same work in a better order and keeps
+working afterwards as new uncertainty arrives.
+
+**context.md ingested, and the classifier was right to refuse it as a table.**
+It called it "documentation, not a dataset", returned "none: comparison only",
+and matched no gap. Correct. The facts inside it went to `catalog.business_facts`
+instead, with the source file's own `(verified)` tagging carried through, because
+an unconfirmed fact must not reach the agent looking confirmed.
+
+**The commission rates are the live example of why that matters.** Every other
+fact line in that file is tagged `(verified)`. The commission line carries no tag
+at all, so by the file's own convention nobody has confirmed it. GetYourGuide
+30%, Viator 22%, Musement/TUI 20%, Airbnb 25%, Google and FHDN 20%. Those are now
+in `catalog.channel_commission`, flagged unverified, and queued as **priority 1
+doubts**, one per channel.
+
+### Where the upload idea stops, and why
+
+Fede: "I upload an invoice for 15 new bikes, bam it updates the fleet database
+with new bikes, and now there is a new gap: bike number, lock type, size."
+
+**The observer half is built. The writer half is refused**, for two independent
+reasons either of which would be enough:
+
+1. **bc-data reads the fleet database and never writes to it.** That is the
+   founding constraint of this project and Fede's own instruction ("I can't
+   afford breaking the fleet app"). Writing rows into a live booking system from
+   a parsed PDF is exactly the thing that constraint exists to prevent.
+2. **An invoice does not contain what the fleet needs.** It says "15 city bikes,
+   4,200 DKK each". The fleet app needs a row per bike with an id, frame number,
+   key number and size. Auto-creating 15 rows would be INVENTING them, and a
+   bike that exists in the fleet app but not in reality corrupts availability,
+   which corrupts bookings.
+
+What is built instead delivers the outcome he described without the danger: the
+invoice becomes a source, the discrepancy between bikes purchased and bikes
+registered becomes visible, and the missing per-bike details become a gap on the
+Gaps page. Two gaps added for exactly this: `bike_purchase_records` (upload the
+invoice) and `bike_identity_details` (enter in the FLEET app; the hourly refresh
+picks them up by itself).
+
+The general rule, worth keeping: **this tool proposes and observes; it does not
+write to systems it does not own.**
+
+One bug found and fixed on the way: generating 207 doubts in one statement blew
+the OS argument limit and surfaced as a bare `spawn E2BIG`, which is a baffling
+error for "your statement is long". `db.catalogWrite` now routes anything over
+100 KB through a temp file.
+
 ### 2026-08-10, upload a file and the tool works out what it is
 
 Fede asked for two things that turned out to be one machine: parse the guide
