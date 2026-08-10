@@ -26,12 +26,13 @@ run() {
   return 0
 }
 
-run "1/6  Warehouse against the live fleet database" verify-warehouse.sh
-run "2/6  Data assertions"                           run-assertions.sh
-run "3/6  Canonical queries"                         test-canonical.sh
-run "4/6  Catalog integrity"                         verify-catalog.sh
-run "5/6  Guide name matching"                      test-guide-matching.js.sh
-run "6/6  Agent tools and safety"                   test-agent-tools.js.sh
+run "1/7  Warehouse against the live fleet database" verify-warehouse.sh
+run "2/7  Data assertions"                           run-assertions.sh
+run "3/7  Canonical queries"                         test-canonical.sh
+run "4/7  Catalog integrity"                         verify-catalog.sh
+run "5/7  Guide name matching"                      test-guide-matching.js.sh
+run "6/7  Agent tools and safety"                   test-agent-tools.js.sh
+run "7/7  Per-question spending limit"              test-budget.js.sh
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"

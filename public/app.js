@@ -205,10 +205,10 @@ function addUser(text) {
   msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
-async function ask(question) {
+async function ask(question, resume = null) {
   state.busy = true;
   $('#send').disabled = true;
-  addUser(question);
+  if (!resume) addUser(question);
 
   // A reply to an existing answer is treated as a correction as well as a
   // question: it is recorded permanently and fed into every later answer.
@@ -230,12 +230,13 @@ async function ask(question) {
 
   let answer = '';
   let meta = null;
+  let paused = false;
 
   try {
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ question, history: state.history.slice(-3) }),
+      body: JSON.stringify({ question, resume, history: state.history.slice(-3) }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Request failed');
 
@@ -265,6 +266,13 @@ async function ask(question) {
             : data.name === 'find_canonical_query' ? 'Checking the verified queries…'
             : data.name === 'describe_table' ? 'Reading the data dictionary…'
             : 'Looking things up…';
+        } else if (ev === 'budget') {
+          // Fede's per-question spending limit. The work done so far is kept
+          // server-side, so continuing costs only what comes next rather than
+          // paying twice for the part already answered.
+          thinking.remove();
+          bubble.appendChild(budgetPrompt(data, bubble));
+          paused = true;
         } else if (ev === 'done') {
           meta = data;
         } else if (ev === 'error') {
@@ -280,13 +288,45 @@ async function ask(question) {
 
   thinking.remove();
   if (meta) renderMeta(bubble, meta);
-  if (answer) state.history.push({ question, answer });
-  state.lastLogId = meta?.query_log_id ?? null;
+  if (answer && !paused) state.history.push({ question, answer });
+  if (meta?.query_log_id != null) state.lastLogId = meta.query_log_id;
 
   state.busy = false;
   $('#send').disabled = false;
   loadFreshness();
   msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+/**
+ * The over-budget prompt. Deliberately plain: how much it has cost, what it
+ * would cost to carry on, and two buttons. No jargon, no token counts.
+ */
+function budgetPrompt(data, bubble) {
+  const box = el('div', 'budget');
+  box.appendChild(el('b', null, `This question has cost ${data.spent_dkk.toFixed(2)} DKK`));
+  box.appendChild(el('p', null,
+    `That is the ${data.budget_dkk} DKK limit for one question. ` +
+    `It has not finished, and carrying on would cost more.`));
+
+  const row = el('div', 'budget-actions');
+  const go = el('button', 'budget-go', `Keep going (up to ${data.max_dkk} DKK)`);
+  const stop = el('button', 'budget-stop', 'Stop here');
+
+  go.addEventListener('click', () => {
+    row.remove();
+    box.appendChild(el('p', 'muted small', 'Continuing…'));
+    ask(null, data.resume_token);
+  });
+  stop.addEventListener('click', () => {
+    row.remove();
+    box.appendChild(el('p', 'muted small',
+      `Stopped at ${data.spent_dkk.toFixed(2)} DKK. Try asking something narrower.`));
+  });
+
+  row.appendChild(go);
+  row.appendChild(stop);
+  box.appendChild(row);
+  return box;
 }
 
 function renderMeta(bubble, meta) {
@@ -314,10 +354,16 @@ function renderMeta(bubble, meta) {
       `Data as of ${String(meta.freshness.loaded_at).slice(0, 16)} UTC`);
     bar.appendChild(chip);
   }
-  if (meta.cost_usd != null) {
-    bar.appendChild(el('span', 'attribution',
-      `$${meta.cost_usd.toFixed(3)} · ${(meta.latency_ms / 1000).toFixed(1)}s` +
-      (meta.cache_hit_ratio ? ` · ${Math.round(meta.cache_hit_ratio * 100)}% cached` : '')));
+  // DKK, not dollars: it is what Fede thinks in and what the budget is set in.
+  if (meta.cost_dkk != null) {
+    const overBudget = meta.budget_dkk && meta.cost_dkk > meta.budget_dkk;
+    bar.appendChild(Object.assign(el('span', 'attribution' + (overBudget ? ' over' : '')), {
+      textContent: `${meta.cost_dkk.toFixed(2)} DKK · ${(meta.latency_ms / 1000).toFixed(1)}s` +
+        (meta.cache_hit_ratio ? ` · ${Math.round(meta.cache_hit_ratio * 100)}% reused` : ''),
+      title: meta.cache_hit_ratio
+        ? `Reusing the cached background context keeps repeat questions cheap. $${meta.cost_usd?.toFixed(4)}`
+        : `$${meta.cost_usd?.toFixed(4)}`,
+    }));
   }
   bubble.appendChild(bar);
 

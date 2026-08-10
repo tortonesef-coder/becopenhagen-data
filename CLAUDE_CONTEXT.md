@@ -680,6 +680,51 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, a spending limit per question, and two pricing corrections
+
+Fede asked for a per-question budget: about 3 DKK, and if it hits or is heading
+for that, ask whether to go up to 10. Built, and checking the real pricing while
+building it caught two things I had guessed at.
+
+**`max_tokens` was too low.** On `claude-opus-5` thinking is ON BY DEFAULT, and
+`max_tokens` caps thinking PLUS the visible answer together. The 8000 I had set
+was sized for the answer alone, carried over from an older model's behaviour, so
+a thinking-heavy question would have truncated mid-sentence. Now 12000, with
+`thinking: {type: "adaptive"}` and `output_config.effort` stated explicitly
+rather than left implicit.
+
+**The price constants happened to be right** ($5 in, $25 out, $6.25 cache write
+at the 5 minute TTL, $0.50 cache read, per million) but they were a guess, and
+they are now load-bearing for a money feature. Verified and annotated.
+
+**His 3 DKK turns out to be well calibrated**, which is worth recording because
+it was a guess on his side too. Measured against the real 17k-token cached
+context:
+
+| Question | Cost |
+|---|---|
+| First of the day (writes the cache) | 1.06 DKK |
+| A repeat question (reads the cache) | **0.39 DKK** |
+| A thinking-heavy question | 1.02 DKK |
+| A six turn agentic question | 3.20 DKK, prompts |
+
+So normal questions pass straight through and only a runaway multi-turn one
+trips it. The repeat figure is also the first hard evidence that the mandatory
+prompt caching is doing its job.
+
+**Mechanics.** The check runs BETWEEN turns and projects one turn ahead, because
+the expensive unit is a whole turn (it re-sends the conversation plus every tool
+result); stopping only once the limit is already blown would routinely overshoot.
+On a pause the conversation is parked server-side under a token, so continuing
+costs only what comes next rather than paying twice for work already done. The
+hard 10 DKK ceiling is not negotiable: an approved question still stops, and
+answers with what it has.
+
+Limits, ceiling, USD-DKK rate and effort all live in `catalog.settings`, so
+changing them is not a deploy. The UI shows DKK rather than dollars.
+
+Verification is now 127 checks across seven suites, all green.
+
 ### 2026-08-10, Phase 3: the tool exists, and guide names get resolved properly
 
 The app is built and running under pm2 as `bc-data` on port 4200. Express,

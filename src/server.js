@@ -107,8 +107,10 @@ app.post('/session/logout', (req, res) => {
 
 // ── Ask ─────────────────────────────────────────────────────────────────────
 app.post('/api/ask', requireAuth, async (req, res) => {
+  // A resume carries no question: it continues one that paused on the budget.
+  const resume = req.body?.resume ? String(req.body.resume) : null;
   const question = String(req.body?.question || '').trim();
-  if (!question) return res.status(400).json({ error: 'Ask something.' });
+  if (!question && !resume) return res.status(400).json({ error: 'Ask something.' });
   if (question.length > 4000) return res.status(400).json({ error: 'That question is too long.' });
 
   const history = Array.isArray(req.body?.history) ? req.body.history.slice(-6) : [];
@@ -124,7 +126,7 @@ app.post('/api/ask', requireAuth, async (req, res) => {
   };
 
   try {
-    await agent.ask({ question, username: req.session.username, history }, emit);
+    await agent.ask({ question, username: req.session.username, history, resume }, emit);
   } catch (e) {
     console.error('[ask]', e.message);
     emit('error', { error: e.friendly || 'Something went wrong answering that. The error is in the server log.' });
