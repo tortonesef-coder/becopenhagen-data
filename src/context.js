@@ -83,6 +83,11 @@ style preferences.
     suggest it, so nobody expects a joined analysis that cannot be built. Those
     sources can be compared against in words and never computed with.
 14. Still one gap per answer, maximum.
+15. Before your final answer, call report_sources_used and name ONLY the sources
+    that actually carried it. Everything you queried is already recorded as
+    merely referenced; this is for the one or two that the answer depended on.
+    Naming everything you touched makes the record useless, and the record is
+    how we learn which data is worth keeping.
 
 Gaps also carry a "status". "partial" means bc-fleet already holds some of it
 and only the rest is missing: say which half exists, or you will offer to add
@@ -237,6 +242,50 @@ async function factsBlock() {
   return out + '\n';
 }
 
+/**
+ * What Fede and Søren have already settled, from the Doubts queue.
+ *
+ * Fede, 2026-08-10: "me checking or X doubts should make the model smarter
+ * also, so it has fewer doubts in the future."
+ *
+ * This is the half that makes the queue compound rather than just drain. Every
+ * decision goes back into the prompt, so the same ground is not re-litigated:
+ * a confirmed thing is stated as settled, and a denial carries the REASON,
+ * which is the part that generalises. "No, private tours are 16 not 12" stops
+ * the next twenty guesses about capacity, not just that one.
+ *
+ * Capped and ordered so the block cannot grow without bound: denials first
+ * (they carry more information than confirmations), most recent first.
+ */
+async function settledBlock() {
+  const denied = await db.catalog(`
+    SELECT subject, question, proposed, note FROM catalog.doubts
+    WHERE status = 'denied' AND COALESCE(note,'') <> ''
+    ORDER BY decided_at DESC LIMIT 60`).catch(() => []);
+  const confirmed = await db.catalog(`
+    SELECT subject, question FROM catalog.doubts
+    WHERE status = 'confirmed' ORDER BY decided_at DESC LIMIT 40`).catch(() => []);
+
+  if (!denied.length && !confirmed.length) return '';
+
+  let out = '# Already settled\n\nQuestions Fede or Søren have answered. Do not re-open these, and\napply the reasoning to anything similar.\n';
+
+  if (denied.length) {
+    out += '\n## Corrected, with the reason\n\nThe model believed something and was told it was wrong. The correction is\nthe important part: it usually applies more widely than the one thing asked.\n';
+    for (const d of denied) {
+      out += `\n- ${d.subject}: was believed to be "${String(d.proposed || '').replace(/\s+/g, ' ').slice(0, 160)}"\n`;
+      out += `  CORRECTED TO: ${String(d.note).replace(/\s+/g, ' ')}\n`;
+    }
+  }
+  if (confirmed.length) {
+    out += '\n## Confirmed as correct\n';
+    for (const c of confirmed) {
+      out += `\n- ${c.subject}: ${String(c.question).replace(/\s+/g, ' ')} YES.`;
+    }
+  }
+  return out + '\n';
+}
+
 async function correctionsBlock() {
   // Things the users have said that exist in no database. This is knowledge
   // that would otherwise have died in a chat window.
@@ -254,10 +303,11 @@ async function correctionsBlock() {
 
 /** Builds the full static block. Called once at boot and on reload(). */
 async function build() {
-  const [schema, defs, limits, gaps, facts, corrections] = await Promise.all([
-    schemaSummary(), definitionsBlock(), limitsBlock(), gapsBlock(), factsBlock(), correctionsBlock(),
+  const [schema, defs, limits, gaps, facts, settled, corrections] = await Promise.all([
+    schemaSummary(), definitionsBlock(), limitsBlock(), gapsBlock(), factsBlock(),
+    settledBlock(), correctionsBlock(),
   ]);
-  cached = [BUSINESS, defs, schema, limits, gaps, facts, corrections, BEHAVIOUR]
+  cached = [BUSINESS, defs, schema, limits, gaps, facts, settled, corrections, BEHAVIOUR]
     .filter(Boolean).join('\n\n---\n\n');
   return cached;
 }

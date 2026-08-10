@@ -48,6 +48,34 @@ const DEFINITIONS = [
     },
   },
   {
+    name: 'report_sources_used',
+    description:
+      'Say which data sources actually CARRIED your answer, as opposed to ones you merely joined or looked at. ' +
+      'Call this once, just before your final answer. Only name a source if the answer would change without it: ' +
+      '"load_bearing" means the headline number came out of it, "decisive" means it is why the answer says what it ' +
+      'says rather than the opposite. Everything you queried is already recorded as merely referenced, so listing ' +
+      'a table just because you touched it adds nothing and makes the record less useful.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        sources: {
+          type: 'array',
+          description: 'Only the sources that genuinely mattered. Often one or two. Sometimes none.',
+          items: {
+            type: 'object',
+            properties: {
+              source_key: { type: 'string', description: 'e.g. bc.departures' },
+              level: { type: 'string', enum: ['load_bearing', 'decisive'] },
+              note: { type: 'string', description: 'One short line on what it contributed.' },
+            },
+            required: ['source_key', 'level', 'note'],
+          },
+        },
+      },
+      required: ['sources'],
+    },
+  },
+  {
     name: 'log_gap_hit',
     description:
       'Record that a known data gap was relevant to this question. Call at most ONCE per answer, and only when the gap ' +
@@ -192,6 +220,13 @@ async function execute(name, input, ctx) {
         return { error: e.message, kind: e.kind || 'error',
           note: 'Fix the query and try again. Use describe_table if you are unsure of a column.' };
       }
+    }
+
+    case 'report_sources_used': {
+      const list = Array.isArray(input.sources) ? input.sources : [];
+      ctx.contributions = list;
+      return { recorded: list.length,
+        note: list.length ? 'Noted.' : 'Noted: nothing beyond the obvious carried this answer.' };
     }
 
     case 'log_gap_hit': {

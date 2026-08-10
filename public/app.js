@@ -52,6 +52,7 @@ function showApp() {
   loadFreshness();
   loadDefinitions();
   loadDoubtCount();
+  loadCuratorCount();
 }
 
 // ── Freshness chip ─────────────────────────────────────────────────────────
@@ -411,7 +412,8 @@ async function renderTab(tab) {
       pane.appendChild(buildDropZone());
       await renderPendingUploads(pane);
       pane.appendChild(el('p', 'muted small',
-        'Where every number comes from, and what will bite you. Freshness is checked hourly.'));
+        'Every source, every datapoint inside it, what will bite you, and how much work it has actually done. ' +
+        'Freshness is checked hourly.'));
       for (const s of rows) {
         const card = el('div', 'card');
         const h = el('h3', null, s.display_name || s.source_key);
@@ -428,9 +430,13 @@ async function renderTab(tab) {
           `Loaded ${s.last_loaded_at || 'never'}` +
           (delta != null ? ` · ${delta >= 0 ? '+' : ''}${delta} since previous load` : '') +
           (s.max_date_in_data ? ` · newest data ${s.max_date_in_data}` : '')));
+        card.appendChild(usageLine(s.usage));
+        if (s.columns.length) card.appendChild(columnsBlock(s.columns));
         if (s.gotchas) card.appendChild(el('div', 'gotchas', s.gotchas));
         pane.appendChild(card);
       }
+    } else if (tab === 'curator') {
+      await renderCurator(pane);
     } else if (tab === 'dictionary') {
       const rows = await api('/api/definitions');
       state.definitions = rows;
@@ -468,6 +474,141 @@ async function renderTab(tab) {
     pane.innerHTML = '';
     pane.appendChild(Object.assign(el('div', 'error'), { textContent: e.message }));
   }
+}
+
+// ── The library: how hard a source is working ──────────────────────────────
+// Three numbers, and the third is the one that matters. "Used" is just how
+// often it appeared in a query, which mostly measures how convenient it is to
+// join. "Carried the answer" is the model saying the headline number came out
+// of it, and that is the number worth reading.
+function usageLine(u) {
+  if (!u || !Number(u.times_used)) {
+    return el('p', 'usage muted small', 'Never used in an answer yet.');
+  }
+  const p = el('p', 'usage small');
+  const used = Number(u.times_used), mattered = Number(u.times_mattered);
+  p.appendChild(Object.assign(el('span', 'badge' + (mattered ? ' green' : '')),
+    { textContent: `${mattered} of ${used} answers` }));
+  p.appendChild(document.createTextNode(
+    mattered
+      ? ` carried by this source${Number(u.times_decisive) ? `, ${u.times_decisive} where it changed the conclusion` : ''}.`
+      : ` used it, but it has never carried the number. It may be getting joined out of habit.`));
+  if (Number(u.in_corrected_answers)) {
+    p.appendChild(Object.assign(el('span', 'badge amber'),
+      { textContent: `${u.in_corrected_answers} corrected` }));
+  }
+  return p;
+}
+
+/** The datapoints. Collapsed by default: some tables have forty columns. */
+function columnsBlock(cols) {
+  const unreviewed = cols.filter(c => !c.reviewed).length;
+  const d = el('details', 'cols');
+  const sum = el('summary', null,
+    `${cols.length} datapoint${cols.length === 1 ? '' : 's'}` +
+    (unreviewed ? ` · ${unreviewed} not yet checked by a person` : ' · all checked'));
+  d.appendChild(sum);
+  for (const c of cols) {
+    const row = el('div', 'col-row');
+    const name = el('span', 'col-name', c.column_name);
+    if (c.is_pii) name.appendChild(Object.assign(el('span', 'badge amber'), { textContent: 'personal' }));
+    if (!c.reviewed) name.appendChild(Object.assign(el('span', 'badge'), { textContent: 'unchecked' }));
+    row.appendChild(name);
+    row.appendChild(el('span', 'col-type', c.data_type || ''));
+    if (c.description) row.appendChild(el('span', 'col-desc', c.description));
+    if (c.gotcha) row.appendChild(el('span', 'col-desc warnish', c.gotcha));
+    d.appendChild(row);
+  }
+  return d;
+}
+
+// ── Curator ────────────────────────────────────────────────────────────────
+// Suggestions only, and every one of them adds something. There is deliberately
+// no button here that changes or removes an existing source: the promise is
+// additive-only, and a screen that can do both cannot make that promise.
+async function renderCurator(pane) {
+  let data;
+  try { data = await api('/api/curator'); }
+  catch (e) { pane.innerHTML = ''; pane.appendChild(Object.assign(el('div','error'),{textContent:e.message})); return; }
+
+  pane.innerHTML = '';
+  pane.appendChild(el('p', 'muted small',
+    'Things that could be joined up, data sitting unused, and documents whose numbers are not queryable yet. ' +
+    'Every suggestion only ever adds something. Nothing here changes or deletes a source, so saying yes cannot break an existing answer.'));
+  pane.appendChild(el('p', 'muted small',
+    `${data.counts.open} open, ${data.counts.accepted} accepted, ${data.counts.rejected} turned down.`));
+
+  if (!data.queue.length) {
+    pane.appendChild(Object.assign(el('div', 'card'),
+      { textContent: 'Nothing to suggest right now. It looks again every night.' }));
+    return;
+  }
+
+  for (const p of data.queue) {
+    const card = el('div', 'card');
+    const kind = el('div', 'doubt-kind');
+    kind.appendChild(Object.assign(el('span', 'badge' + (p.confidence === 'high' ? ' green' : p.confidence === 'low' ? ' amber' : '')),
+      { textContent: p.kind.replace(/_/g, ' ') }));
+    kind.appendChild(Object.assign(el('span', 'key'), { textContent: p.affects }));
+    card.appendChild(kind);
+
+    card.appendChild(el('h3', null, p.title));
+    card.appendChild(el('p', null, p.rationale));
+    if (p.evidence) {
+      const pre = el('pre', 'doubt-detail');
+      pre.textContent = p.evidence;
+      card.appendChild(pre);
+    }
+    if (p.proposed_sql) {
+      card.appendChild(el('p', 'muted small', 'If you accept, this is what gets run:'));
+      card.appendChild(el('div', 'sqlsnip', p.proposed_sql));
+    }
+
+    const note = el('textarea');
+    note.className = 'doubt-note';
+    note.rows = 2;
+    note.placeholder = 'Turning it down? Say why, and it will stop suggesting this (optional)';
+    card.appendChild(note);
+
+    const row = el('div', 'budget-actions');
+    const yes = el('button', 'doubt-yes', '✓  Worth doing');
+    const no = el('button', 'doubt-no', '✗  No');
+    yes.addEventListener('click', () => decideProposal(card, p.proposal_id, 'accepted', note.value));
+    no.addEventListener('click', () => decideProposal(card, p.proposal_id, 'rejected', note.value));
+    row.appendChild(yes); row.appendChild(no);
+    card.appendChild(row);
+    pane.appendChild(card);
+  }
+}
+
+async function decideProposal(card, id, decision, note) {
+  const inner = card.innerHTML;
+  card.innerHTML = '<div class="loading">Saving…</div>';
+  try {
+    const out = await api(`/api/curator/${id}/decide`, { method: 'POST', body: { decision, note: note || null } });
+    card.innerHTML = '';
+    card.appendChild(el('p', 'muted small',
+      decision === 'accepted' ? 'Accepted.' : 'Turned down, and the reason is saved so it stops asking.'));
+    // An accepted proposal is a decision, not an action. Saying what to run
+    // next beats a screen that quietly ran it.
+    if (out.next_step) {
+      card.appendChild(el('p', 'muted small', 'Next step, on the server:'));
+      card.appendChild(el('div', 'sqlsnip', out.next_step));
+    }
+    loadCuratorCount();
+  } catch (e) {
+    card.innerHTML = inner;
+    card.appendChild(Object.assign(el('div', 'error'), { textContent: e.message }));
+  }
+}
+
+async function loadCuratorCount() {
+  try {
+    const { counts } = await api('/api/curator');
+    const badge = $('#curator-count');
+    if (Number(counts.open) > 0) { badge.textContent = counts.open; badge.hidden = false; }
+    else badge.hidden = true;
+  } catch { /* the badge is not worth an error */ }
 }
 
 // ── Upload ─────────────────────────────────────────────────────────────────

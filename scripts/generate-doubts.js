@@ -151,7 +151,34 @@ const add = d => doubts.push(d);
   const existing = new Set((await db.catalog(
     `SELECT doubt_id FROM catalog.doubts WHERE status <> 'open'`)).map(r => r.doubt_id));
 
-  const fresh = doubts.filter(d => !existing.has(idFor(d.kind, d.subject)));
+  // THE QUEUE MUST SHRINK, NOT GROW. Fede: "me checking or X doubts should make
+  // the model smarter also, so it has fewer doubts in the future."
+  //
+  // Two ways that happens here. First, anything already decided is never
+  // re-asked (the set above). Second, a KIND that is being confirmed almost
+  // every time is a kind the models are reliably right about, so asking more of
+  // them wastes the one scarce resource in this system, which is Fede's
+  // attention. Once a kind is 15-for-15 or better at 90%, only a sample of the
+  // rest is queued.
+  const track = await db.catalog(`
+    SELECT kind,
+           COUNT(*) FILTER (WHERE status = 'confirmed') AS yes,
+           COUNT(*) FILTER (WHERE status = 'denied')    AS no
+    FROM catalog.doubts WHERE status IN ('confirmed','denied') GROUP BY 1`);
+  const trusted = new Map();
+  for (const t of track) {
+    const total = Number(t.yes) + Number(t.no);
+    if (total >= 15 && Number(t.yes) / total >= 0.9) trusted.set(t.kind, Number(t.yes) / total);
+  }
+  for (const [kind, rate] of trusted) {
+    console.log(`  note: ${kind.replace(/_/g, ' ')} confirmed ${Math.round(rate * 100)}% of the time, so only a sample of the rest is queued`);
+  }
+
+  let fresh = doubts.filter(d => !existing.has(idFor(d.kind, d.subject)));
+  if (trusted.size) {
+    let i = 0;
+    fresh = fresh.filter(d => !trusted.has(d.kind) || (i++ % 5 === 0));
+  }
   const byKind = doubts.reduce((a, d) => (a[d.kind] = (a[d.kind] || 0) + 1, a), {});
 
   console.log('Doubts found:');

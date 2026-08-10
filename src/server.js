@@ -147,6 +147,10 @@ app.post('/api/correction', requireAuth, async (req, res) => {
       query_log_id: query_log_id ?? null,
       applies_to: applies_to || null,
     });
+    // A correction downgrades the usage it was attached to. Without this the
+    // usefulness numbers only ever rise, which makes them a popularity contest
+    // rather than a measure of whether the data actually helped.
+    await require('./usage').markCorrected(query_log_id ?? null).catch(() => {});
     // The correction feeds the next answer, so the prompt must be rebuilt.
     await context.reload();
     res.json({ ok: true });
@@ -266,14 +270,40 @@ app.get('/api/sources/uploads', requireAuth, async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── Sources, Dictionary, Gaps (read-only for now; CRUD lands in phase 7) ────
+// ── The library: sources, their datapoints, and how each one gets used ──────
+// Fede: "the app basically has a catalogue of databases and data points, each
+// is extensively described and catalogued... and every time it's used it also
+// logs how it was used."
+//
+// The usage numbers are attached here rather than kept on a separate page on
+// purpose: "this source has answered nine questions and carried the number in
+// two of them" only means anything sitting next to what the source is.
 app.get('/api/sources', requireAuth, async (_req, res) => {
   try {
-    res.json(await db.catalog(`
+    const sources = await db.catalog(`
       SELECT source_key, display_name, description, grain, gotchas, refresh_cadence_hours,
              retrieval_method, retrieval_instructions, last_loaded_at, last_row_count,
              prev_row_count, max_date_in_data
-      FROM catalog.sources ORDER BY source_key`));
+      FROM catalog.sources ORDER BY source_key`);
+
+    const usage = await require('./usage').summary().catch(() => []);
+    const byKey = Object.fromEntries(usage.map(u => [u.source_key, u]));
+
+    // The datapoints. A column with no description is as much a part of the
+    // catalogue as one with a description, and more urgent, so unreviewed and
+    // undescribed columns are counted rather than hidden.
+    const cols = await db.catalog(`
+      SELECT 'bc.' || table_name AS source_key, column_name, data_type, description,
+             gotcha, is_pii, reviewed_by IS NOT NULL AS reviewed
+      FROM catalog.columns WHERE schema_name = 'bc' ORDER BY table_name, column_name`);
+    const colsBy = {};
+    for (const c of cols) (colsBy[c.source_key] ||= []).push(c);
+
+    res.json(sources.map(s => ({
+      ...s,
+      usage: byKey[s.source_key] || null,
+      columns: colsBy[s.source_key] || [],
+    })));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -350,14 +380,75 @@ app.post('/api/doubts/:id/decide', requireAuth, async (req, res) => {
         context: `Doubt ${d.kind} on ${d.subject}. The model believed: ${String(d.proposed || '').slice(0, 500)}`,
         applies_to: d.subject,
       });
-      await context.reload();
     }
+    // BOTH decisions rebuild the prompt, not just denials. Fede: "me checking or
+    // X doubts should make the model smarter also, so it has fewer doubts in the
+    // future." A confirmation is information too: it settles the question, and
+    // the next draft of anything similar starts from settled ground.
+    if (decision !== 'skipped') await context.reload();
 
     const [counts] = await db.catalog(
       `SELECT COUNT(*) FILTER (WHERE status='open') AS open FROM catalog.doubts`);
     res.json({ ok: true, status: decision, open: counts.open });
   } catch (e) {
     console.error('[doubts]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Curator ─────────────────────────────────────────────────────────────────
+// Proposals, never actions. Accepting one records the decision and, where there
+// is something to run, tells you what to run. It does not silently reshape the
+// warehouse: the whole promise is additive-only, and a curator that edits
+// sources by itself cannot make that promise.
+app.get('/api/curator', requireAuth, async (_req, res) => {
+  try {
+    const rows = await db.catalog(`
+      SELECT proposal_id, created_at, kind, title, rationale, evidence,
+             proposed_sql, affects, confidence
+      FROM catalog.curator_proposals WHERE status = 'open'
+      ORDER BY CASE confidence WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+               created_at DESC LIMIT 50`);
+    const [counts] = await db.catalog(`
+      SELECT COUNT(*) FILTER (WHERE status='open')     AS open,
+             COUNT(*) FILTER (WHERE status='accepted') AS accepted,
+             COUNT(*) FILTER (WHERE status='rejected') AS rejected
+      FROM catalog.curator_proposals`);
+    res.json({ queue: rows, counts });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/curator/:id/decide', requireAuth, async (req, res) => {
+  const id = String(req.params.id);
+  const decision = ['accepted', 'rejected'].includes(req.body?.decision) ? req.body.decision : null;
+  if (!decision) return res.status(400).json({ error: 'Decision must be accepted or rejected.' });
+
+  const [p] = await db.catalog(
+    `SELECT * FROM catalog.curator_proposals WHERE proposal_id = ${db.esc(id)}`);
+  if (!p) return res.status(404).json({ error: 'No such proposal.' });
+
+  const note = req.body?.note ? String(req.body.note).slice(0, 4000) : null;
+  try {
+    await db.catalogWrite(`
+      UPDATE catalog.curator_proposals SET status = ${db.esc(decision)},
+        decided_by = ${db.esc(req.session.username)}, decided_at = now(), note = ${db.esc(note)}
+      WHERE proposal_id = ${db.esc(id)};`);
+
+    // A rejection is the half worth keeping. "These two tables should not be
+    // joined, because..." is knowledge that exists nowhere in the schema, and
+    // without recording it the curator proposes the same join next week.
+    if (decision === 'rejected') {
+      await db.logCorrection({
+        said_by: req.session.username,
+        correction: note || `Rejected the suggestion: ${p.title}`,
+        context: `Curator ${p.kind} proposal affecting ${p.affects}. It argued: ${String(p.rationale).slice(0, 500)}`,
+        applies_to: p.affects,
+      });
+      await context.reload();
+    }
+    res.json({ ok: true, status: decision, next_step: decision === 'accepted' ? p.proposed_sql : null });
+  } catch (e) {
+    console.error('[curator]', e.message);
     res.status(500).json({ error: e.message });
   }
 });

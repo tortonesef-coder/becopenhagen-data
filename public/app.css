@@ -251,3 +251,31 @@ details.sql .purpose { color: var(--muted); padding: .4rem .65rem 0; }
 .doubt-no { background: var(--red-soft); color: var(--red); }
 .doubt-no:hover { background: var(--red); color: #fff; }
 .tab .badge { margin-left: .3rem; background: var(--amber-soft); color: var(--amber); }
+
+/* ── Library: usage and datapoints ───────────────────────────────────────── */
+.usage { margin: .1rem 0 .6rem; display: flex; align-items: baseline; gap: .35rem; flex-wrap: wrap; }
+.usage .badge { flex: none; }
+.cols { margin: .2rem 0 .7rem; border-top: 1px solid var(--line); padding-top: .5rem; }
+.cols summary {
+  cursor: pointer; font-size: .85rem; color: var(--muted); list-style: none;
+  padding: .15rem 0;
+}
+.cols summary::-webkit-details-marker { display: none; }
+.cols summary::before { content: '▸ '; }
+.cols[open] summary::before { content: '▾ '; }
+.cols summary:hover { color: var(--ink); }
+.col-row {
+  display: grid; grid-template-columns: minmax(9rem, 14rem) 6rem 1fr; gap: .5rem;
+  padding: .3rem 0; border-bottom: 1px solid var(--line); font-size: .84rem;
+  align-items: baseline;
+}
+.col-row:last-child { border-bottom: 0; }
+.col-name { font-family: var(--mono); word-break: break-all; }
+.col-name .badge { margin-left: .3rem; }
+.col-type { color: var(--muted); font-size: .78rem; text-transform: lowercase; }
+.col-desc { color: var(--muted); line-height: 1.45; }
+.col-desc.warnish { color: var(--amber); grid-column: 3; }
+@media (max-width: 640px) {
+  .col-row { grid-template-columns: 1fr; gap: .15rem; }
+  .col-desc.warnish { grid-column: auto; }
+}

@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const db = require('./db');
 const context = require('./context');
 const tools = require('./tools');
+const usage = require('./usage');
 
 const API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = process.env.AGENT_MODEL || 'claude-opus-5';
@@ -188,7 +189,7 @@ async function ask({ question, username, history = [], resume = null }, emit = (
     { role: 'user', content: question },
   ];
 
-  const ctx = { sqlRun: [], assertionsFired: [], gapCited: null, canonicalUsed: null };
+  const ctx = { sqlRun: [], assertionsFired: [], gapCited: null, canonicalUsed: null, contributions: [] };
   const usage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
 
   return runLoop({
@@ -320,6 +321,19 @@ async function runLoop(state, emit = () => {}) {
     console.error('[agent] could not write the query log:', e.message);
   }
   meta.query_log_id = queryLogId;
+
+  // Which sources actually earned their place. Everything queried is recorded
+  // as referenced; the agent's own report upgrades the ones that carried the
+  // answer. Never allowed to break an answer that already succeeded.
+  try {
+    await usage.record({
+      queryLogId, username,
+      sqlRun: ctx.sqlRun,
+      contributions: ctx.contributions,
+    });
+  } catch (e) {
+    console.error('[agent] could not record source usage:', e.message);
+  }
 
   emit('done', meta);
   return { answer, meta };

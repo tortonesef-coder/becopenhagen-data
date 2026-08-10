@@ -697,19 +697,110 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 | 0. Read and report | **Done 2026-08-10** |
 | 1. Warehouse | **Done 2026-08-10.** Live, hourly, 22/22 verification checks passing |
 | 2. Catalog | **Done 2026-08-10.** 130 columns documented, 23 definitions, 17 assertions |
-| 3. Agent and Ask page | **Built 2026-08-10.** Live under pm2 on port 4200. BLOCKED on DNS and API credit, see below |
-| 2. Catalog | Not started |
-| 3. Agent and Ask page | Not started |
-| 4. Audit session with Fede | Not started. Blocks phase 5 |
-| 5. Sources page and alerting | Not started |
+| 3. Agent and Ask page | **Done 2026-08-10.** Live at data.becopenhagen.dk under pm2 on port 4200 |
+| Uploads (amendment 01) | **Done 2026-08-10.** Drop a file, a model proposes, a person confirms |
+| Doubts queue | **Done 2026-08-10.** Replaces phase 4's shape: the audit happens one card at a time, not in one sitting |
+| Librarian and curator | **Done 2026-08-10.** Usage logging, the Library tab, the Curator tab, nightly at 03:20 |
+| 4. Audit session with Fede | Superseded by the Doubts queue. 244 open questions, priority 1 first |
+| 5. FareHarbor exports and alerting | Not started |
 | 6. Statbank | Not started |
-| 7. Dictionary and Gaps pages | Not started |
+| 7. Dictionary and Gaps CRUD | Not started |
 
 ---
 
 ## 9. Session log
 
 Newest entry on top.
+
+### 2026-08-10, the librarian and the curator, and seven invoices nobody could ask about
+
+Fede asked for three things: decisions on doubts should make the models smarter,
+the bike invoice's useful data should not be wasted, and the app should have "a
+catalogue of databases and data points... every time it's used it also logs how
+it was used" plus "a curator that looks for opportunities for relevant mergers
+(additive only, never replacing), or new databases."
+
+**The finding that mattered most was not part of the request.** The curator's
+first useful check asks "is anything catalogued but unreachable?" and found
+three tables: `catalog.guide_invoices`, `catalog.business_facts` and
+`catalog.channel_commission`. 22 rows of real, hand-checked data, described in
+detail in the catalog, and **completely invisible to the Ask page.** `run_sql`
+opens `warehouse.duckdb` read-only and nothing else; those tables live in
+`catalog_store.duckdb`, a different file that is never attached. So the invoice
+parsing Fede asked for so "the data tool has this data too" produced numbers no
+question could reach, and nothing said so.
+
+Fixed in two parts, because being queryable and being known are different
+problems:
+
+- `sql/build-catalog-views.sql` copies the three into the warehouse each hour.
+  Copied, not viewed: a view over an ATTACHed database dies with its connection,
+  and the warehouse is swapped hourly.
+- `sql/catalog-bc-registration.sql` re-registers them under `bc.*` and writes
+  their 28 column descriptions. The agent's schema block is built from
+  `catalog.columns WHERE schema_name = 'bc'`, so a table filed under `catalog.`
+  is absent from the prompt no matter what is in the warehouse.
+
+The static context went from 88,921 to 95,057 characters. `bc.guide_invoices` is
+now queryable, which means "what did each guide bill against what the app
+recorded" is answerable for the first time.
+
+**Usage logging, three levels** (`src/usage.js`). The naive version is worse
+than nothing: log every table in every query and `bc.departures` wins forever
+and the number means nothing. So `referenced` is parsed from the SQL,
+`load_bearing` and `decisive` are claimed by the agent via a new
+`report_sources_used` tool, and a claim is only upgraded if the table was
+**actually queried**, which drops hallucinated citations. A correction
+downgrades the usage attached to it.
+
+**The curator** (`scripts/curator.js`) is deterministic SQL over the catalogue,
+not model judgement. Two tables sharing a join key is a fact; a source
+referenced forty times and never load-bearing is arithmetic. Additive-only is
+enforced by shape: there is no proposal kind that drops, replaces or edits a
+source, so the worst a bad proposal can do is add something nobody uses.
+
+Its first run taught the real lesson. Two checks ("15 sources never used", "8
+tables share availability_id and are not being used together") were **true and
+useless**: usage logging was an hour old, so everything looked neglected. Both
+now wait for 25 logged uses. The four proposals already queued were marked
+`superseded` rather than deleted, with the reason. *A curator that flags
+everything teaches people to ignore it.*
+
+**Document extraction** (`scripts/extract-document.js`) answers "feels like a
+pity to waste this info". Two passes, and the split is the point: propose a
+schema first, then fill it. One pass invites the model to invent a column when a
+value is missing, because it is choosing the shape and filling it at the same
+moment. Fixing the shape first means a missing value comes back null, which is
+the truth.
+
+Two things found by running it against a real PDF:
+- every field must be a **string** in the row schema. A nullable field needs a
+  union type, and the API rejects a schema with more than a handful: *"too many
+  parameters with union types"*. An 18-column invoice fails outright. Strings
+  also match the rule `ingest.js` already follows.
+- `TRY_CAST` never fails, which is convenient and is exactly where silent damage
+  happens. Every cast is now counted, and a value that was present before the
+  cast and NULL after is reported and written into the gotchas.
+
+Verified on the Donkey Republic receipt: 17 columns, correct figures, 0.42 DKK.
+
+**The learning loop.** `settledBlock()` in `src/context.js` puts decided doubts
+into the cached prefix, denials with their reasons first. Both confirm and deny
+reload the context, not just denials: a confirmation settles a question too.
+`generate-doubts.js` now samples only 1-in-5 of any doubt kind running at ≥90%
+confirmed over ≥15 decisions, so a kind the models are reliably right about
+stops consuming the one scarce resource here, which is Fede's attention.
+
+Three attribution notes, because they are the kind of thing that rots:
+- the 28 hand-written column descriptions say `drafted_by = claude`, and they go
+  into the Doubts queue like every other drafted description. Marking them
+  reviewed to keep the queue short would record a review that never happened.
+- `verify.sh` failed three checks mid-session (warehouse pax **above** live).
+  That was staleness, not a bug: the 21:35 snapshot predated the fleet scraper's
+  22:00 cancellation sweep. A refresh cleared it. All 8 suites pass.
+- the nightly job (`scripts/nightly.sh`, 03:20) only ever writes to a queue.
+  Neither step changes a source, a number or an answer, which is what makes it
+  safe to run unattended.
 
 ### 2026-08-10, the Doubts queue, and where the upload idea has to stop
 
