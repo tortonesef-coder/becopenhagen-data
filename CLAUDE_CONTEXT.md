@@ -357,6 +357,62 @@ fleet's log tables before the first 120 day deletion.
   It would cut `tour_change_log` by ~62% at source and shrink `fleet.db` by
   roughly 450 MB.
 
+### 2026-08-10, capacity: do not hand-maintain it, harvest it
+
+Fede gave the numbers: 12 on every tour except F3 which is 10; private sells at
+max 16 but he will exceed it on request; CUSTOM has no limit. He then asked
+whether the tool needs a settings page for this, or could auto-update.
+
+**Auto-update. FareHarbor already publishes capacity per availability and the
+fleet scraper already downloads it, then discards it.** Confirmed read-only
+against the payloads captured in `tour_change_log.raw_data`. FareHarbor's own
+numbers match Fede's answer exactly:
+
+| Code | FareHarbor `capacity` | Departures sampled |
+|---|---|---|
+| A3 | 12 | 49 |
+| L3 | 12 | 21 |
+| H3 | 12 | 3 |
+| A3G | 12 | 6 |
+| F3 | 10 | 5 |
+| A3P | 16 | 6 |
+| CUSTOM | 25 | 2 |
+
+The payload also carries `bookable_capacity`, `reserved_capacity`,
+`non_resource_bookable_capacity` and `blocks_included_bookable_capacity`.
+`capacity` is the seat limit; `bookable_capacity` is what is still sellable and
+moves as bookings and resource blocks land.
+
+**Design consequence: capacity belongs on each departure row, not in a products
+table.** Per-departure capture handles every case Fede raised for free: a
+private group he lets past 16, CUSTOM having no fixed limit, and the numbers
+changing in future. A static `bc.products` capacity column would need editing
+every time and would silently be wrong in between.
+
+`bc.products` therefore shrinks to a small dimension table (name, is_private,
+status, legacy codes) with **no capacity column**, plus an optional manual
+override for the rare case where FareHarbor itself is wrong.
+
+**How to get it without touching the fleet app** (Fede's constraint, see above):
+
+- **Backfill:** mine `tour_change_log.raw_data` for `"capacity"`. 103,194 rows
+  contain it. Caveat: `raw_data` is capped at 4000 characters by the scraper, so
+  some payloads are truncated mid-JSON and must be regex-scanned, not parsed.
+  Also only covers departures logged since 2026-07-07 and dies with the 120 day
+  retention, so harvest it into the archive early.
+- **Going forward:** bc-data does its own read-only FareHarbor calendar fetch.
+  Do NOT modify `scrape-guide-schedule-v2.js` to store capacity, however
+  tempting and however small the change: the fleet app is off limits.
+- **Sequencing:** fold the capacity fetch into the phase 5 FareHarbor work,
+  which already needs its own authenticated session, rather than standing up a
+  second FareHarbor login earlier than necessary. Until then, seed capacity from
+  the backfill plus Fede's stated defaults (12 / F3 10 / private 16 / CUSTOM
+  unlimited) and mark the source of each value so the agent can say which it used.
+
+Also confirmed by Fede: A3F and H3P are not retired, they simply have not run
+yet. Keep them active, and exclude never-run products from averages by checking
+departure count, not by a status flag.
+
 ### 2026-08-10, PII
 
 **Allow customer details when explicitly asked for.** Aggregate by default
@@ -382,13 +438,14 @@ the question is explicitly about one. Consequences to implement:
 | 1 | Which FareHarbor reports does Fede download | **Answered from code.** Three: bookings (detailed), sales, customers. Column signatures in `brain/server.js` `sniffReport()`. Confirm nothing has been added since |
 | 2 | Can the report export be reached from the scraper session | **Unresolved.** Assessment in the phase 0 report. Needs one read-only probe. Now higher priority: phase 5 is where the lost history comes back |
 | 3 | Exact fleet SQLite path | **Answered.** `/var/www/becopenhagen-fleet/data/fleet.db` |
-| 4 | Real assertion bounds | **Blocked on Fede.** 104 active bikes today. Per-tour capacity exists in no database; the `bc.products` table must be hand-filled or no fill rate is computable |
+| 4 | Real assertion bounds | **Answered.** 104 active bikes today. Capacity comes from FareHarbor per departure, see section 7. The `pax <= capacity` assertion must be `warn`, not `block`: Fede overbooks private tours deliberately when a group emails |
 | 5 | Booking date or departure date canonical | **Needs Fede.** Both columns exist, one is 40% NULL. With bc-brain retired, departure date is the only one that works until phase 5 |
 | 6 | PII policy | **Answered.** Section 7 above |
 | 7 | Confirm repo, subdomain, pm2 names | **Repo confirmed and pushed 2026-08-10.** Port still not allocated |
 | 8 | The existing brain | **Answered and decided.** Sections 5 and 7 |
-| 9 | Are A3F and H3P still sold | **New.** Neither has run in the six weeks of data. If retired they must be excluded from averages |
+| 9 | Are A3F and H3P still sold | **Answered.** Not retired, just never run yet. Keep active |
 | 10 | `catalog.query_log` retention period | **New, from the PII decision.** Proposed 180 days |
+| 11 | Whole-VPS backup | **Recommended to Fede 2026-08-10:** turn on Hetzner Cloud Backups (a console checkbox, 20% of server cost). A second VPS solves availability, not backup, and is the wrong tool here. Disk in use is only 6.8 GB of 38 GB, so size is not the obstacle. Note that a VM snapshot of a running WAL SQLite file can be inconsistent, which is why `scripts/backup.sh` uses `sqlite3 .backup` for `fleet.db` and must stay. The VPS backup covers everything that script does not: code, Caddy config, `/etc/environment`, `wiki.db`, and the brain CSVs |
 
 ---
 
@@ -410,6 +467,22 @@ the question is explicitly about one. Consequences to implement:
 ## 9. Session log
 
 Newest entry on top.
+
+### 2026-08-10, capacity turns out to be free
+
+Fede supplied capacities (12, F3 10, private 16 soft, CUSTOM unlimited) and
+asked whether the tool needs a settings page for data like this, or could
+auto-update. Checked before answering, and the answer is better than either:
+**FareHarbor publishes `capacity` on every availability, the fleet scraper
+already fetches it and throws it away.** Its numbers match Fede's exactly across
+92 sampled departures. So capacity is captured per departure rather than
+hand-maintained per product, which also handles the two awkward cases he raised
+(overbooking a private group on request, CUSTOM having no limit) with no
+settings page at all. Detail and the harvest plan in section 7.
+
+The general lesson for the rest of this build: before adding a settings page for
+a number, check whether FareHarbor already knows it. A settings page is a
+standing invitation for the tool's numbers to drift from reality.
 
 ### 2026-08-10, Phase 0 decisions: retire the brain, archive the logs, allow PII
 
