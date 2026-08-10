@@ -28,6 +28,18 @@ const idFor = (kind, subject) =>
 const doubts = [];
 const add = d => doubts.push(d);
 
+/** Query results as a plain aligned table, so a card can show an answer rather than SQL. */
+function asTable(rows) {
+  const cols = Object.keys(rows[0]);
+  const fmt = v => v === null || v === undefined ? '-'
+    : typeof v === 'number' ? (Number.isInteger(v) ? v.toLocaleString('en-GB') : v.toFixed(2))
+    : String(v).slice(0, 40);
+  const w = cols.map(c => Math.max(c.length, ...rows.map(r => fmt(r[c]).length)));
+  const line = cells => cells.map((c, i) => String(c).padEnd(w[i])).join('  ').trimEnd();
+  return [line(cols.map(c => c.replace(/_/g, ' '))), line(w.map(n => '-'.repeat(n))),
+    ...rows.map(r => line(cols.map(c => fmt(r[c]))))].join('\n');
+}
+
 (async () => {
   // ── 1. Invoice figures. Highest priority: these are money, a person is
   // owed them, and the model flagged specific problems with four of seven.
@@ -54,19 +66,44 @@ const add = d => doubts.push(d);
     });
   }
 
-  // ── 2. Canonical queries. These are what phase 4 was for: the agent is told
-  // to trust them VERBATIM, so an unverified one is trusted without ever having
-  // been checked.
+  // ── 2. Canonical queries. The agent is told to trust these VERBATIM, so an
+  // unverified one is trusted without ever having been checked.
+  //
+  // SHOW THE ANSWER, NOT THE QUERY. The card used to print the SQL and ask "is
+  // this the right way to answer it?", which is unanswerable unless you read
+  // SQL. Fede: "still too confusing imo." He is right, and he is also the only
+  // person who can do the check that matters: he knows his own business, so if
+  // the top bike type is one he barely owns, he will spot it in a second where
+  // no amount of SQL review would.
+  //
+  // So the query is RUN here and its real output goes on the card. Verify by
+  // result, not by code.
   for (const r of await db.catalog(`
       SELECT query_key, question_pattern, sql, notes
       FROM catalog.canonical_queries WHERE verified_by IS NULL`)) {
+    const asked = String(r.question_pattern).split(';')[0].trim();
+
+    let shown;
+    if (String(r.sql).includes('{')) {
+      // Needs a date or a product filled in, so there is no single answer to
+      // show. Ask about the WORDING instead, which is still answerable.
+      shown = 'This one needs a date or a tour name filled in, so there is no single answer to show.';
+    } else {
+      try {
+        const rows = await db.warehouse(`SELECT * FROM (${String(r.sql).replace(/;\s*$/, '')}) LIMIT 8`);
+        shown = rows.length ? asTable(rows) : 'It comes back with no rows at all. That may be right, or it may be the bug.';
+      } catch (e) {
+        shown = `It does not run: ${e.message}\n\nThat is a bug regardless of your answer, and I will fix it.`;
+      }
+    }
+
     add({
       kind: 'canonical_query',
       subject: r.query_key,
-      question: `When someone asks "${String(r.question_pattern).split(';')[0].trim()}", is this the right way to answer it?`,
-      detail: `${r.notes}\n\nThe query:\n${r.sql}`,
+      question: `If you asked "${asked}", is this the answer you would expect?`,
+      detail: `${shown}\n\n${r.notes}`,
       proposed: r.sql,
-      impact: 'The tool is told to use this VERBATIM rather than writing its own SQL, so if it is wrong the same wrong answer comes back every time.',
+      impact: 'This is the tool\'s standard answer to that question, reused every time anyone asks it. If it is wrong, it is wrong the same way forever.',
       priority: 2,
       writeback_sql: `UPDATE catalog.canonical_queries SET verified_by = {user}, verified_at = now() WHERE query_key = ${q(r.query_key)}`,
     });
@@ -153,25 +190,41 @@ const add = d => doubts.push(d);
     });
   }
 
-  // ── 5. Column descriptions. The largest group by far, and the least
-  // individually consequential, so they sit at the bottom. A wrong description
-  // misleads the tool about one column; the ones that matter are the money and
-  // date columns, which get bumped.
+  // ── 5. Column descriptions, but only where the model ADMITTED it was unsure.
+  //
+  // This used to queue all 162 unreviewed columns as "Is this right about
+  // bc.booking_pace.departure_date?". Almost none of them needed a person: a
+  // description like "the date of the departure" is checkable against the data,
+  // which is my job, not Fede's. Asking him anyway buried the seven that
+  // genuinely need him under 155 that did not, and the queue nobody finishes
+  // protects nothing.
+  //
+  // The signal is HEDGING. When the drafting model wrote "probably", "appears
+  // to", "assumed", "unclear", it was flagging a guess it could not resolve
+  // from the data. That is precisely the case where the answer lives in Fede's
+  // head and nowhere else. Everything else stays unreviewed and honestly
+  // labelled as drafted-not-reviewed, which is what the catalog already says.
+  const HEDGE = /\b(probabl|appears to|seems? to|seem |assum|believ|unclear|unknown|not clear|presumabl|likely|may be|might be|unverified|guess)/i;
+
   for (const r of await db.catalog(`
       SELECT table_name, column_name, description, gotcha, is_pii
       FROM catalog.columns WHERE reviewed_by IS NULL AND description IS NOT NULL`)) {
     const key = `${r.table_name}.${r.column_name}`;
-    const loadBearing = /gross|dkk|amount|price|pax|capacity|fill|date|rate|hours/i.test(r.column_name);
+    const text = `${r.description || ''} ${r.gotcha || ''}`;
+    if (!HEDGE.test(text)) continue;
+
+    // Quote the hedge back, so the card asks about the uncertain bit rather
+    // than about the whole paragraph.
+    const sentences = text.split(/(?<=[.!?])\s+/).filter(s => HEDGE.test(s));
     add({
       kind: 'column_description',
       subject: key,
-      question: `Is this right about bc.${key}?`,
-      detail: `${r.description}${r.gotcha ? `\n\nGotcha recorded: ${r.gotcha}` : ''}`,
-      proposed: r.description,
-      impact: loadBearing
-        ? 'This column carries money, dates or passenger counts, so a wrong description leads the tool to use it wrongly.'
-        : 'A wrong description here would mislead the tool about one column.',
-      priority: loadBearing ? 6 : 8,
+      question: `The tool is guessing about "${r.column_name.replace(/_/g, ' ')}". Do you know the answer?`,
+      detail: `It is unsure about this:\n\n${sentences.join('\n\n')}\n\nFull note on bc.${key}:\n${r.description}` +
+              `${r.gotcha ? `\n\nAnd: ${r.gotcha}` : ''}`,
+      proposed: sentences.join(' '),
+      impact: 'It wrote this down as a guess and then uses it in every answer that touches this column. A guess nobody corrects becomes a fact nobody questions.',
+      priority: 5,
       writeback_sql: `UPDATE catalog.columns SET reviewed_by = {user}, reviewed_at = now() WHERE schema_name='bc' AND table_name = ${q(r.table_name)} AND column_name = ${q(r.column_name)}`,
     });
   }

@@ -712,6 +712,40 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, verify by result, not by code: 244 doubts down to 70
+
+Fede, on a card that printed a SQL query and asked "is this the right way to
+answer it?": **"still too confusing imo."** Right again, and the same mistake as
+the assertion bounds an hour earlier: the queue kept asking him to review
+engineering artefacts.
+
+**Canonical queries: SHOW THE ANSWER, NOT THE QUERY.** The card now RUNS the
+query and prints its real output, and asks "If you asked *which bike types are
+used most*, is this the answer you would expect?" over an eight-row table. That
+is a check only he can do, and he can do it in five seconds: if the top bike
+type were one he barely owns, he would spot it instantly where no amount of SQL
+review would help. 19 of the 20 run without a parameter; the one that needs a
+date says so.
+
+**Column descriptions: only where the model HEDGED.** 162 unreviewed columns
+were being queued as "Is this right about bc.booking_pace.departure_date?".
+Almost none needed a person. "The date of the departure" is checkable against
+the data, which is my job. The signal worth surfacing is hedging: where the
+drafting model wrote *probably, appears to, assumed, unclear, believed*, it was
+flagging a guess it could not resolve from the data, and that is exactly where
+the answer lives in Fede's head and nowhere else. Six columns, not 162, and the
+card quotes the uncertain sentence back rather than the whole paragraph.
+
+**The queue went from 244 to 70**, and the 174 that left were the ones that
+could not have been answered. A queue nobody finishes protects nothing.
+
+The rule now applied three times in one evening, and it should be applied to
+anything added later:
+
+> A doubt belongs in the queue only if the answer lives in Fede's head and
+> nowhere else. If it can be checked against the data, check it against the
+> data. If it is an engineering decision, decide it and write it down here.
+
 ### 2026-08-10, asking Fede questions he cannot answer, and Skip meaning never
 
 He reached the assertion-bound cards and said: "I just skipped another doubt
