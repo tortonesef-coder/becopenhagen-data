@@ -712,6 +712,38 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, two bugs Fede found by asking one real question
+
+He asked which guide had worked the most hours. The answer was right. Two things
+around it were not.
+
+**1. Fenced code rendered as one unreadable line.** `renderMarkdown` in
+`public/app.js` handled tables, headings, lists and paragraphs, and had no
+branch for ``` fences at all, so a fence line fell through to the paragraph
+handler, which joins lines with a space and prints the backticks. Any query the
+model quoted in its prose came out as a single line of SQL with visible
+backticks. Added a fenced-code branch, first in the chain, plus a `.codeblock`
+style.
+
+**2. A STALE GAP IS WORSE THAN A MISSING ONE.** The answer ended by offering to
+go and parse the guide invoice PDFs so hours could be turned into cost. Those
+PDFs had already been parsed. `catalog.gaps.payroll_rates` still said the
+numbers were "unparsed" and only the filename was stored, that text goes
+straight into the prompt, and it reads as authoritative because it is written
+down. The tool volunteered work that was already done.
+
+Corrected in `sql/catalog-gaps-invoices-parsed.sql`. payroll_rates stays
+PARTIAL, not ingested: the rates exist but cover 5 of 8 guides, no figure has
+been checked by a person, and four of the seven files have known problems.
+Marking it closed would claim a completeness that is not there. Also updated
+`bike_purchase_records` and `maintenance_cost` to point at
+`extract-document.js`, since getting that data is now one command.
+
+The general fix is a new curator check, `gap_already_filled`: a gap whose own
+text names a `bc.*` table that now exists in the warehouse. Deterministic, no
+model judgement, and it catches the next one automatically. It fired on the
+first run and found `payroll_rates` before this entry was written.
+
 ### 2026-08-10, the librarian and the curator, and seven invoices nobody could ask about
 
 Fede asked for three things: decisions on doubts should make the models smarter,

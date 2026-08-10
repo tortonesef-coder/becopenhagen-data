@@ -160,6 +160,39 @@ const add = p => proposals.push(p);
     });
   }
 
+  // ── 2b. A gap that has already been filled ────────────────────────────────
+  // Found the hard way. The payroll_rates gap said the invoice figures were
+  // "unparsed" and only filenames were stored. By the time Fede asked his first
+  // real question that was false: the PDFs had been parsed and bc.guide_invoices
+  // existed. The gap text goes into the prompt, so an otherwise correct answer
+  // ended by offering to go and fetch data the tool already had.
+  //
+  // A STALE GAP IS WORSE THAN A MISSING ONE. It makes the tool volunteer work
+  // that is already done, and it reads as authoritative because it is written
+  // down. This check is deterministic: the gap's own text names a bc.* table,
+  // and that table now exists with rows in it.
+  for (const g of await db.catalog(
+      `SELECT gap_key, missing, contains, how_to_get, status FROM catalog.gaps WHERE status = 'gap'`)) {
+    const named = [...new Set(
+      (`${g.missing} ${g.contains} ${g.how_to_get}`.match(/\bbc\.[a-z_][a-z0-9_]*/gi) || [])
+        .map(t => t.toLowerCase()))].filter(t => inWarehouse.has(t));
+    if (!named.length) continue;
+
+    add({
+      kind: 'gap_already_filled',
+      key: g.gap_key,
+      title: `The gap "${g.gap_key.replace(/_/g, ' ')}" names ${named.join(', ')}, which now exists`,
+      rationale:
+        `This gap is still marked "gap", but its own description points at ${named.join(', ')} and that table is ` +
+        `in the warehouse. Gap text goes into the prompt, so if the data has arrived the tool is telling people ` +
+        `it is missing and offering to go and get it. Move it to partial or ingested, whichever is true.`,
+      evidence: `Status: ${g.status}\nSays: ${String(g.missing).slice(0, 220)}\nNow exists: ${named.join(', ')}`,
+      proposed_sql: null,
+      affects: g.gap_key,
+      confidence: 'high',
+    });
+  }
+
   // ── 3. A gap an existing source might already answer ──────────────────────
   // Cheap word overlap, deliberately LOW confidence. The point is to surface a
   // coincidence for a person to look at, never to close a gap automatically:

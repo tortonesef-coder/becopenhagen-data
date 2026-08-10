@@ -279,3 +279,16 @@ details.sql .purpose { color: var(--muted); padding: .4rem .65rem 0; }
   .col-row { grid-template-columns: 1fr; gap: .15rem; }
   .col-desc.warnish { grid-column: auto; }
 }
+
+/* Fenced code inside an answer. The SQL the tool ran already has its own panel
+   below the answer; this is for when the model quotes code in the prose. */
+.codeblock {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: .6rem .7rem; margin: .6rem 0; font-size: .82rem; line-height: 1.5;
+  font-family: var(--mono); overflow-x: auto; white-space: pre;
+}
+.codeblock code { font: inherit; background: none; padding: 0; }
+.codeblock[data-lang]::before {
+  content: attr(data-lang); display: block; font-size: .7rem; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: .35rem;
+}

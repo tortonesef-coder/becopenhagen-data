@@ -150,6 +150,21 @@ function renderMarkdown(md) {
   while (i < lines.length) {
     const line = lines[i];
 
+    // Fenced code. Must come first: a fence line matches nothing else here, so
+    // without this branch it falls through to the paragraph handler, which
+    // joins every line with a space and prints the backticks. The answer then
+    // shows a whole query on one unreadable line, which is what Fede hit.
+    if (/^\s*```/.test(line)) {
+      const lang = line.trim().slice(3).trim();
+      const body = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) body.push(lines[i++]);
+      i++;   // the closing fence, or the end of the text if the model forgot it
+      out.push(`<pre class="codeblock"${lang ? ` data-lang="${esc(lang)}"` : ''}>` +
+               `<code>${esc(body.join('\n'))}</code></pre>`);
+      continue;
+    }
+
     if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] || '')) {
       const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
       const head = cells(line);
@@ -175,7 +190,7 @@ function renderMarkdown(md) {
     }
     if (!line.trim()) { i++; continue; }
     const para = [];
-    while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|\s*[-*]\s|\s*\d+\.\s|\s*\|)/.test(lines[i])) para.push(lines[i++]);
+    while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|\s*[-*]\s|\s*\d+\.\s|\s*\||\s*```)/.test(lines[i])) para.push(lines[i++]);
     out.push(`<p>${inline(para.join(' '))}</p>`);
   }
   return out.join('');
