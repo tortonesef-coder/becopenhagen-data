@@ -539,12 +539,91 @@ privates on request.
 
 ---
 
+## 7d. The catalog
+
+`/var/lib/bc-data/catalog_store.duckdb`. **Not** named `catalog.duckdb`: DuckDB
+names the database after the file, which collides with a schema also called
+`catalog` and makes every reference ambiguous.
+
+It is a SEPARATE FILE from the warehouse on purpose. The warehouse is dropped
+and rebuilt every hour; anything hand-written in it would be destroyed on the
+next tick. The catalog holds exactly what must survive: agreed definitions,
+recorded mistakes, and every question ever asked.
+
+| Table | Rows | What it is |
+|---|---|---|
+| `sources` | 15 | One per `bc.*` table, with the `gotchas` that stop wrong answers |
+| `definitions` | 23 | The business dictionary, injected into the prompt on every call |
+| `columns` | 43 of ~130 | LLM-drafted descriptions, all `reviewed_by IS NULL` |
+| `canonical_queries` | 20 | Drafted, all `verified_by IS NULL` until phase 4 |
+| `assertions` | 16 | 6 block, 10 warn. Bounds measured, not guessed |
+| `limits` | 8 | Inferential traps, checked before any causal sentence |
+| `gaps` | 9 | The data roadmap, ranked by citation once the agent runs |
+| `query_log` | 0 | Phase 3 fills it |
+| `statbank_tables` | 0 | Phase 6 |
+| `settings` | 1 | `query_log_retention_days = 180`, proposed, unconfirmed |
+
+Seeds are split across four SQL files so re-running one never clobbers another:
+`catalog-schema.sql` (idempotent DDL), `catalog-seed.sql` (sources, limits,
+gaps), `catalog-definitions.sql` (the dictionary Fede edits), and
+`catalog-assertions.sql` / `catalog-canonical.sql`.
+
+### Assertion bounds are measured, and the spec's were wrong
+
+Every bound was recomputed against real data; `bounds_source` records `measured`
+or `stated_by_fede`, and `verify-catalog.sh` fails if anything is still
+`guessed`. Three of the spec's proposed bounds were off by enough to be useless:
+
+| Spec proposed | Reality | Now |
+|---|---|---|
+| No departure before 2019-01-01 | Data starts 2026-06-28 | 2026-06-28, and it fires |
+| Monthly pax 0 to 5000 | Busiest month is 294 | 2000, about 7x headroom |
+| Revenue per booking 0 to 50000 DKK | Max observed 19,300 | 25000 |
+
+`pax_within_capacity` is a **warn**, never a block, because Fede overbooks
+private tours on request. An assertion that fires on correct business practice
+trains people to ignore assertions.
+
+### The July hole, and why it is the most important thing in the catalog
+
+Departure rows dated before **2026-08-03** all read `pax = 0`, and it is false.
+The `bookings` ledger holds 180 tour bookings for July, and **179 of those 180
+point at an `availability_id` that no longer exists** in `tour_availabilities`.
+The departure rows for tours that actually sold were deleted from the live fleet
+database; what survives for July is mostly private slots that never sold.
+
+Unhandled, "how did July go" answers **"93 departures, 0 passengers, 0% full"**
+with total confidence. That is the worst answer this tool could produce, and it
+is precisely the failure mode the whole project exists to prevent.
+
+Three layers now stop it: `bc.departures.pax_is_reliable`, a `block` assertion,
+and the `history_starts_june_2026` limit rule.
+
+`bc.departures_recovered` reconstructs the deleted departures from the archive
+(375 July departures, 332 pax, versus 93 and 0 in the live database). It is
+deliberately NOT merged into `bc.departures`: measured against August, where the
+live data is ground truth, it over-counts pax by **43%**, because FareHarbor
+reissues availability IDs and deduping needs a `start_time` the change log never
+recorded. Trading a visible hole for an invisible inflation is a much worse deal.
+
+### Verification
+
+`scripts/verify.sh` runs all four suites: warehouse vs the live fleet database,
+data assertions, every canonical query executed, and catalog integrity. Run it
+after ANY change to the SQL or the catalog. All green as of 2026-08-10.
+
+`run-assertions.sh` and `update-catalog-stats.sh` are also wired into the hourly
+`refresh.sh`, so a bad build is caught at build time rather than in an answer.
+
+---
+
 ## 8. Phase status
 
 | Phase | Status |
 |---|---|
 | 0. Read and report | **Done 2026-08-10** |
 | 1. Warehouse | **Done 2026-08-10.** Live, hourly, 22/22 verification checks passing |
+| 2. Catalog | **Done 2026-08-10**, except 9 tables of column drafts blocked on Anthropic API credit. `scripts/verify.sh` all green |
 | 2. Catalog | Not started |
 | 3. Agent and Ask page | Not started |
 | 4. Audit session with Fede | Not started. Blocks phase 5 |
@@ -557,6 +636,42 @@ privates on request.
 ## 9. Session log
 
 Newest entry on top.
+
+### 2026-08-10, Phase 2: the catalog, and the July hole
+
+Catalog built: 15 sources with gotchas, 23 definitions, 16 assertions, 8 limits,
+9 gaps, 20 canonical queries all executed against the real warehouse. Mechanics
+in section 7d. `scripts/verify.sh` runs all four suites and is green.
+
+**The finding that justifies the whole project.** While computing real assertion
+bounds I noticed July reporting 93 departures and zero passengers. It is not
+true: 179 of 180 July tour bookings point at a departure row that has been
+deleted from the live fleet database. Asked "how did July go", the tool would
+have answered "0 passengers, 0% full" with complete confidence. That is exactly
+the confident wrong answer the spec was written to prevent, and it was three
+days of work away from being the first thing Fede ever asked it.
+
+It is now blocked three ways: a `pax_is_reliable` column, a `block` assertion,
+and a limit rule. And the archive built in phase 1 turned out to hold the
+deleted departures: 375 of them for July carrying 332 pax. That reconstruction
+is exposed as `bc.departures_recovered` and deliberately kept OUT of
+`bc.departures`, because measured against August it over-counts by 43% thanks to
+FareHarbor reissuing availability IDs. A visible hole beats an invisible
+inflation.
+
+**Blocked on Fede:** the Anthropic API account hit a zero credit balance partway
+through the column-description pass. 5 tables of 14 completed (43 columns), 9
+failed. `bootstrap-columns.js --only-missing` finishes the rest for well under a
+dollar once there is credit. Nothing else in the project depends on it.
+
+Two bugs of mine, both in verification code, both found because the checks were
+themselves checked: `'\t'` in a DuckDB string literal is a literal backslash-t,
+not a tab, which made `run-assertions.sh` report "0 assertions" while exiting
+successfully; and `information_schema` is scoped to the current database and is
+unreachable through an ATTACH alias, so the cross-file check needed
+`duckdb_tables()`. Both had the same shape as the phase 1 archive bug: a check
+that silently passes because it never ran. That is now the thing to look for
+first in this codebase.
 
 ### 2026-08-10, Phase 1: the warehouse is live
 

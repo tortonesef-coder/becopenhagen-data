@@ -121,9 +121,24 @@ SELECT
   NOT (COALESCE(p.is_private, a.feed_id LIKE '%P') AND COALESCE(a.booking_count,0) = 0)
                                               AS is_real_departure,
 
+  -- THE BIG ONE. Departure rows dated before 2026-08-03 all read pax = 0, and
+  -- it is not true: the bookings ledger holds 180 tour bookings for July, and
+  -- 179 of those 180 point at an availability_id that no longer exists in
+  -- tour_availabilities at all. The departure rows for the tours that actually
+  -- SOLD were deleted from the live database; what survives for July is mostly
+  -- the private slots that never sold. Verified 2026-08-10.
+  --
+  -- Left unfixed, "how did July go" answers "93 departures, 0 passengers, 0%
+  -- full" with total confidence. That is the single worst answer this tool
+  -- could give, so pax and fill_rate are gated on this flag and the catalog
+  -- carries a blocking assertion on it.
+  (CAST(a.start_date AS DATE) >= DATE '2026-08-03')  AS pax_is_reliable,
+
   -- NULL rather than a guess wherever the denominator is not trustworthy:
-  -- CUSTOM has no limit, and an unsold private slot is not a departure.
+  -- CUSTOM has no limit, an unsold private slot is not a departure, and
+  -- anything before 2026-08-03 has a numerator that is not real.
   CASE
+    WHEN CAST(a.start_date AS DATE) < DATE '2026-08-03' THEN NULL
     WHEN p.product_kind = 'custom_tour' THEN NULL
     WHEN COALESCE(p.is_private, a.feed_id LIKE '%P') AND COALESCE(a.booking_count,0) = 0 THEN NULL
     WHEN COALESCE(c.fh_capacity_seats, p.stated_capacity) > 0
@@ -136,6 +151,77 @@ FROM fleet_raw.tour_availabilities a
 LEFT JOIN bc.products p            ON p.product_code = a.feed_id
 LEFT JOIN bc.departure_capacity c  ON c.availability_id = a.availability_id
 WHERE a.feed_type = 'tour';
+
+-- ── Recovered departures (BEST EFFORT, DO NOT MIX WITH bc.departures) ───────
+-- Reconstructs departures that no longer exist in the live database, from the
+-- archived change log. This is the ONLY surviving trace of July's departures.
+--
+-- It is deliberately a SEPARATE table and is deliberately NOT unioned into
+-- bc.departures, because it demonstrably over-counts. Measured against August,
+-- where the live rows are trustworthy ground truth:
+--
+--     live (truth)   288 departures   294 pax
+--     this table     455 departures   421 pax     (+43% pax)
+--
+-- The cause is FareHarbor reissuing an availability's internal ID whenever a
+-- private tour is edited, so the same real departure appears under several IDs.
+-- Deduping needs start_time, which the change log does not record, so it cannot
+-- be done reliably. Merging this into bc.departures would trade a visible hole
+-- for an invisible inflation, which is a much worse trade.
+--
+-- Use it to say "July existed and sold roughly this much", never to report a
+-- precise July figure. The agent must state the +43% caveat whenever it touches
+-- this table.
+CREATE OR REPLACE TABLE bc.departures_recovered AS
+WITH ev AS (
+  SELECT availability_id, feed_id,
+         TRY_CAST(start_date AS DATE)  AS departure_date,
+         field, old_value, new_value,
+         CAST(created_at AS TIMESTAMP) AS ts
+  FROM read_parquet('/var/lib/bc-data/archive/tour_change_log/*.parquet')
+  WHERE start_date IS NOT NULL
+),
+final_pax AS (
+  SELECT availability_id, TRY_CAST(new_value AS INTEGER) AS pax
+  FROM ev WHERE field = 'booking_count'
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY availability_id ORDER BY ts DESC) = 1
+),
+final_guide AS (
+  SELECT availability_id, new_value AS guide
+  FROM ev WHERE field = 'guide' AND COALESCE(new_value, '') <> ''
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY availability_id ORDER BY ts DESC) = 1
+),
+-- The sweep has logged false cancellations before (the fleet's own notes record
+-- nine phantom A3P cancel emails in one sync), so this is surfaced as a flag to
+-- weigh, never used to silently drop a departure.
+marked_cancelled AS (
+  SELECT DISTINCT availability_id FROM ev
+  WHERE field = 'status' AND new_value = 'cancelled'
+),
+meta AS (
+  SELECT availability_id, MAX(feed_id) AS feed_id, MAX(departure_date) AS departure_date,
+         MIN(ts) AS first_seen_at, MAX(ts) AS last_seen_at
+  FROM ev GROUP BY 1
+)
+SELECT
+  m.availability_id,
+  m.feed_id                       AS product_code,
+  p2.product_name,
+  p2.product_kind,
+  COALESCE(p2.is_private, m.feed_id LIKE '%P') AS is_private,
+  m.departure_date,
+  fp.pax                          AS pax_last_logged,
+  fg.guide                        AS guide_last_logged,
+  (mc.availability_id IS NOT NULL) AS was_marked_cancelled,
+  (l.availability_id IS NOT NULL)  AS still_in_live_db,
+  m.first_seen_at,
+  m.last_seen_at
+FROM meta m
+LEFT JOIN final_pax fp        ON fp.availability_id = m.availability_id
+LEFT JOIN final_guide fg      ON fg.availability_id = m.availability_id
+LEFT JOIN marked_cancelled mc ON mc.availability_id = m.availability_id
+LEFT JOIN bc.departures l     ON l.availability_id  = m.availability_id
+LEFT JOIN bc.products p2      ON p2.product_code    = m.feed_id;
 
 -- ── Rentals ─────────────────────────────────────────────────────────────────
 -- Split from departures because booking_count changes meaning here: it is

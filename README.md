@@ -59,3 +59,34 @@ cd /var/www/becopenhagen-data && git pull && pm2 restart bc-data --update-env
 The `pm2 restart` only applies from phase 3, when there is an app to restart.
 Until then `git pull` is the whole deploy: the cron picks up script changes on
 its next run.
+
+## Verifying
+
+```bash
+/var/www/becopenhagen-data/scripts/verify.sh
+```
+
+Runs all four suites: warehouse against the live fleet database, data
+assertions, every canonical query executed, catalog integrity. Run it after any
+change to the SQL or the catalog.
+
+## The catalog
+
+`/var/lib/bc-data/catalog_store.duckdb` holds what must survive the hourly
+rebuild: agreed definitions, recorded mistakes, and every question asked.
+
+```bash
+duckdb /var/lib/bc-data/catalog_store.duckdb
+```
+
+```sql
+SELECT term, definition FROM catalog.definitions;   -- what words mean here
+SELECT source_key, gotchas FROM catalog.sources;    -- what will bite you
+SELECT * FROM catalog.gaps ORDER BY cited_count DESC;
+```
+
+To redraft column descriptions after a schema change:
+
+```bash
+node scripts/bootstrap-columns.js --only-missing
+```

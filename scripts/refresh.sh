@@ -49,6 +49,19 @@ if ! "$HERE/build-warehouse.sh"; then
   exit 3
 fi
 
+# Freshness only. Never overwrites the human-written parts of the catalog.
+if ! "$HERE/update-catalog-stats.sh"; then
+  log "WARNING: catalog freshness stats not updated. The warehouse is fine; the Sources page will show stale timestamps."
+fi
+
+# Data-level assertions, so a bad build is caught here rather than in an answer.
+# Warnings are expected and do not fail the run; a BLOCK failure is not.
+if ! "$HERE/run-assertions.sh" > /tmp/bc-assertions.out 2>&1; then
+  log "BLOCKING ASSERTION FAILED - the warehouse may be reporting something untrue:"
+  grep -E '^  (BLOCK|ERROR)' /tmp/bc-assertions.out || cat /tmp/bc-assertions.out
+fi
+rm -f /tmp/bc-assertions.out
+
 log "--- done ---"
 
 # Keep the log readable rather than letting it grow forever. Everything worth
