@@ -113,6 +113,14 @@ Bike type codes: A adult, SA small adult, TB touring, E electric, GT/GTS guided 
 Tour bike counts come from FareHarbor resources (what was actually assigned); rental counts come from parsing booking text (what the customer ordered). They are not equally reliable.',
  'fede'),
 
+('bc.dialling_codes', 'Dialling code lookup', 'bc', 'view',
+ 'Maps an international phone prefix to a country and market label. Hand maintained, longest prefix wins.',
+ 'One row per country dialling code.',
+ 1, 'auto', 'Hand maintained in sql/build-warehouse.sql. Add a prefix when an unmatched one shows up.',
+ 'This is a LOOKUP, not customer data. It exists so bc.bookings.customer_market can be derived.
+Longest prefix must win: +45 is Denmark, not "+4" something. The join in build-warehouse.sql orders by prefix length descending for exactly this reason.',
+ 'fede'),
+
 ('bc.daily_bike_load', 'Daily bike load', 'bc', 'view',
  'How many bikes were needed each day across tours and rentals, against the size of the fleet. The bikes half of capacity utilisation (amendment section 6); the seats half is fill_rate on bc.departures.',
  'One row per date on which anything was scheduled.',

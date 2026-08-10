@@ -711,6 +711,51 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, three corrections from Fede, two of which I had called wrong
+
+He pushed back on three of the amendment findings and was right on all three.
+
+**Payroll is nearly free, not medium effort.** He said the guides invoice, so the
+rates exist. Checked: 7 invoice PDFs are uploaded to bc-fleet covering 5 of 8
+active guides across 3 billing periods, sitting on disk under `data/invoices/`.
+Only the FILENAME is in the database; the amounts are inside the PDFs, unparsed.
+So the gap is real but much smaller than I described: the work is parsing files
+we already hold, not chasing a payroll export. Downgraded to LOW effort and
+`how_to_get` rewritten. Caveat kept: 5 of 8 guides, 3 periods, three different
+document formats, one of them in German.
+
+**Negative lead time now clamps to zero.** His reading is right: a booking
+recorded up to three days after its own departure is a walk-in whose record was
+entered late, not a person travelling backwards, so 0 is the correct answer to
+any lead-time question. `lead_time_days_raw` keeps the unclamped value so the
+bookkeeping lag stays visible rather than being quietly rewritten.
+
+**Customer market IS derivable, and I was too quick to call it blocked.** I
+reported that school holidays could not join per market because there is no
+country field. He asked whether the dialling code would do. Measured before
+answering: **614 of 711 bookings (86%) carry an international prefix**, which is
+better coverage than the booking date manages at 60%. Built `bc.dialling_codes`
+(52 prefixes, longest-match wins so +45 beats +4) plus `customer_market` and
+`customer_country_code` on `bc.bookings`.
+
+The market split it produces, first time this business has had one:
+
+| Market | Bookings | Gross DKK |
+|---|---|---|
+| US or Canada | 178 | 245,871 |
+| (no usable phone) | 100 | 166,080 |
+| Germany | 74 | 85,518 |
+| Switzerland | 48 | 73,734 |
+| France | 46 | 53,530 |
+| Netherlands | 45 | 47,071 |
+
+Recorded as a lean rather than a fact: it is the country of the phone NUMBER. A
+German living in Copenhagen keeps a +49 number, and someone on a local SIM shows
++45. The `school_holidays` gap now says the market half works.
+
+The lesson worth keeping: on two of these I reported "blocked" when the honest
+answer was "I have not measured whether it is blocked". Measure first.
+
 ### 2026-08-10, amendment 01: the gap catalogue, and three join keys that do not hold
 
 Applied `amendment_01_sources.md` in full. It amends the spec in three places

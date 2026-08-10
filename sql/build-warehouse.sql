@@ -293,13 +293,23 @@ SELECT
   -- which would compress a genuinely old booking to near-zero lead and
   -- understate the average. NULL is the honest answer for those rows.
   --
-  -- Coverage is 424 of 710 (60%). Observed range -3 to 120 days, mean 10.
-  -- The four NEGATIVE values are real rows, not a bug: a booking recorded up
-  -- to three days AFTER its own departure, almost certainly a walk-in entered
-  -- late. Left as-is rather than clamped, so they stay visible.
+  -- Coverage is 424 of 710 (60%). Observed raw range -3 to 120 days, mean 10.
+  --
+  -- NEGATIVE VALUES ARE CLAMPED TO ZERO (Fede, 2026-08-10: "negative lead time
+  -- should just count as 0? Like, booked on the spot?"). Four rows sit at -1 to
+  -- -3: a booking whose record was created up to three days AFTER its own
+  -- departure. The customer did turn up on the day, so zero is the right answer
+  -- for any lead-time question; the negative is a bookkeeping lag, not a person
+  -- travelling backwards.
+  --
+  -- lead_time_days_raw keeps the unclamped value, so the lag stays visible to
+  -- anyone looking for it and nothing is quietly rewritten.
+  CASE WHEN booking_created_at IS NOT NULL AND tour_start_date IS NOT NULL
+       THEN GREATEST(date_diff('day', CAST(booking_created_at AS DATE), CAST(tour_start_date AS DATE)), 0)
+  END                                     AS lead_time_days,
   CASE WHEN booking_created_at IS NOT NULL AND tour_start_date IS NOT NULL
        THEN date_diff('day', CAST(booking_created_at AS DATE), CAST(tour_start_date AS DATE))
-  END                                     AS lead_time_days,
+  END                                     AS lead_time_days_raw,
 
   -- CALENDAR FEATURES on the departure date. holiday_flag is deliberately
   -- ABSENT: it needs a holiday list, which is gap public_holidays. Everything
@@ -311,6 +321,57 @@ SELECT
   strftime(CAST(tour_start_date AS DATE), '%Y-%m') AS departure_ym,
   (dayofweek(CAST(tour_start_date AS DATE)) IN (0, 6)) AS departure_is_weekend
 FROM fleet_raw.bookings;
+
+-- ── Customer market, from the phone dialling code ───────────────────────────
+-- Fede, 2026-08-10: "dialling code is something, pretty good proxy for market?"
+-- Measured before building: 614 of 711 bookings (86.4%) carry a phone number
+-- with an international prefix. That is far better coverage than the booked
+-- date (60%) and good enough to use.
+--
+-- WHAT IT IS AND IS NOT. It is the country of the phone NUMBER, which is a
+-- proxy for where the customer is from, not a fact about it. A German living in
+-- Copenhagen keeps a +49 number; someone travelling on a local SIM shows +45.
+-- Treat it as a lean, not an identity, and never report it as nationality.
+--
+-- Longest prefix wins, so +45 is matched before +4. Codes are ordered by length
+-- in the CASE below for exactly that reason.
+CREATE OR REPLACE TABLE bc.dialling_codes AS
+SELECT * FROM (VALUES
+  ('+351','PT','Portugal'), ('+352','LU','Luxembourg'), ('+353','IE','Ireland'),
+  ('+354','IS','Iceland'),  ('+358','FI','Finland'),    ('+370','LT','Lithuania'),
+  ('+371','LV','Latvia'),   ('+372','EE','Estonia'),    ('+385','HR','Croatia'),
+  ('+386','SI','Slovenia'), ('+420','CZ','Czechia'),    ('+421','SK','Slovakia'),
+  ('+852','HK','Hong Kong'),('+886','TW','Taiwan'),     ('+966','SA','Saudi Arabia'),
+  ('+971','AE','UAE'),      ('+972','IL','Israel'),
+  ('+20','EG','Egypt'),  ('+27','ZA','South Africa'), ('+30','GR','Greece'),
+  ('+31','NL','Netherlands'), ('+32','BE','Belgium'), ('+33','FR','France'),
+  ('+34','ES','Spain'),  ('+36','HU','Hungary'),     ('+39','IT','Italy'),
+  ('+40','RO','Romania'),('+41','CH','Switzerland'), ('+43','AT','Austria'),
+  ('+44','GB','United Kingdom'), ('+45','DK','Denmark'), ('+46','SE','Sweden'),
+  ('+47','NO','Norway'), ('+48','PL','Poland'),      ('+49','DE','Germany'),
+  ('+52','MX','Mexico'), ('+54','AR','Argentina'),   ('+55','BR','Brazil'),
+  ('+56','CL','Chile'),  ('+57','CO','Colombia'),    ('+60','MY','Malaysia'),
+  ('+61','AU','Australia'), ('+64','NZ','New Zealand'), ('+65','SG','Singapore'),
+  ('+66','TH','Thailand'),  ('+81','JP','Japan'),    ('+82','KR','South Korea'),
+  ('+84','VN','Vietnam'),   ('+86','CN','China'),    ('+90','TR','Turkey'),
+  ('+91','IN','India'),
+  ('+1','US','United States or Canada'), ('+7','RU','Russia or Kazakhstan')
+) AS t(prefix, country_code, market);
+
+ALTER TABLE bc.bookings ADD COLUMN IF NOT EXISTS customer_country_code VARCHAR;
+ALTER TABLE bc.bookings ADD COLUMN IF NOT EXISTS customer_market VARCHAR;
+
+UPDATE bc.bookings b SET
+  customer_country_code = m.country_code,
+  customer_market       = m.market
+FROM (
+  SELECT b2.booking_ref, d.country_code, d.market
+  FROM bc.bookings b2
+  JOIN bc.dialling_codes d
+    ON replace(b2.customer_phone, ' ', '') LIKE d.prefix || '%'
+  -- Longest prefix wins: +4520... is Denmark, not "+4" anything.
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY b2.booking_ref ORDER BY length(d.prefix) DESC) = 1
+) m WHERE m.booking_ref = b.booking_ref;
 
 -- REPEAT CUSTOMER FLAG. Applied as a second pass because it needs the whole
 -- table in scope to know what "prior" means.

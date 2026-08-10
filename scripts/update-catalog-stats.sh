@@ -38,6 +38,7 @@ STATS=$(duckdb "$WH" -noheader -list -c "
   UNION ALL SELECT 'bc.products'            || chr(9) || COUNT(*) || chr(9) || ''                                        FROM bc.products
   UNION ALL SELECT 'bc.departure_bikes'     || chr(9) || COUNT(*) || chr(9) || COALESCE(MAX(departure_date)::VARCHAR,'') FROM bc.departure_bikes
   UNION ALL SELECT 'bc.departure_capacity'  || chr(9) || COUNT(*) || chr(9) || ''                                        FROM bc.departure_capacity
+  UNION ALL SELECT 'bc.dialling_codes'      || chr(9) || COUNT(*) || chr(9) || ''                                        FROM bc.dialling_codes
   UNION ALL SELECT 'bc.daily_bike_load'      || chr(9) || COUNT(*) || chr(9) || COALESCE(MAX(load_date)::VARCHAR,'') FROM bc.daily_bike_load
   UNION ALL SELECT 'bc.guide_identity'     || chr(9) || COUNT(*) || chr(9) || ''                                        FROM bc.guide_identity
   UNION ALL SELECT 'bc.team'                || chr(9) || COUNT(*) || chr(9) || ''                                        FROM bc.team
