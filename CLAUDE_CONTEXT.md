@@ -712,6 +712,62 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, what Fede answered, and the fleet count that was 28x too big
+
+Fifteen doubts decided in the first session with the queue. Four produced real
+changes, and one was a genuine defect nobody would have found by reading code.
+
+**"we don't own 255 guided bikes, so what does bikes allocated mean exactly?"**
+
+He denied the bike_type_demand card. The column `bikes_allocated` summed bikes
+across departures, so 255 was the number of TIMES a guided bike went out across
+76 departures. **He owns 9.** The number was correct and every reader on earth
+would have taken it for a fleet count. A figure 28 times the real fleet, sitting
+in the tool's standard answer to "which bike types are used most".
+
+Rewritten as departures / times_taken_out / avg_per_departure / **we_own**, with
+the fleet number in the next column so the two can never be confused again, plus
+a dictionary entry for "taken out" so the word is glossed wherever it appears.
+This is the strongest argument yet for verify-by-result: no amount of SQL review
+would have caught it, and he caught it in seconds.
+
+**"No, I'd expect a straightforward answer, and ideally a breakdown of bike
+type."** bikes_out_on_date gave a bare total for TOURS ONLY, silently dropping
+rentals, which on a busy day is the half that matters. Now: total, then tours vs
+rentals, then per-type. Rentals appear as one labelled line rather than being
+quietly excluded, because they carry no bike type.
+
+**"Needs to be more conversational, add nuance, explain. But yes, tables are
+good too."** That is about how answers are written, so it went into the Style
+block of the cached prompt rather than into any one query.
+
+**Two invoices turned out not to be invoices.**
+
+- Ibrahim's 80.40 DKK is an EXPENSE CLAIM: he rented a Donkey Republic bike
+  because one of ours broke down mid-tour. Money owed, but maintenance, not
+  labour. Counting it as guide pay would overstate the cost of guiding and hide
+  the cost of bikes failing. It also records the only mid-tour bike failure
+  anywhere in any system, found inside an expense claim rather than a
+  maintenance record, and now written down as a business fact.
+- Monica's PDF is a SUPERSEDED DRAFT. She sent the real invoice by email, so the
+  20,575 DKK subtotal is not what she was paid and her actual figure is unknown
+  to this tool. New gap: invoices_sent_by_email.
+
+Both got a new `document_kind` column rather than being deleted or edited.
+Additive, and the originals stay exactly as parsed.
+
+**A denial has to be able to come back.** He denied two canonical queries with
+feedback, I acted on the feedback, and the rewritten versions would never have
+been shown to him: denied counted as decided forever. Now a doubt returns to the
+queue as soon as the artefact it asks about CHANGES, compared on `proposed`
+rather than on the question text, because for a canonical query the wording is
+fixed and the SQL is the thing that moves. Both came straight back on the next
+run.
+
+Note for the record: his Ibrahim answer arrived at 22:30:53, about two minutes
+before the fix that stopped notes being discarded on a tick. The note survived
+only because it was still sitting in catalog.doubts.note when it was looked for.
+
 ### 2026-08-10, verify by result, not by code: 244 doubts down to 70
 
 Fede, on a card that printed a SQL query and asked "is this the right way to

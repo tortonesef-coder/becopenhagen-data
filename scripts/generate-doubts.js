@@ -261,20 +261,37 @@ function asTable(rows) {
     RETURNING 1 AS reopened;`).then(r => [{ reopened: r.length }]).catch(() => [{ reopened: 0 }]);
   if (reopened) console.log(`  ${reopened} skipped doubt(s) put back in the queue. Skip means later, not never.`);
 
-  // And a skipped question that has since been REWRITTEN comes back straight
-  // away, without waiting out the week. Fede skipped "Is this limit set
-  // sensibly: history horizon?" because it was unanswerable as written. Once
-  // the wording changes it is a different question, and holding back the
-  // readable version because he declined the unreadable one helps nobody.
-  const skipped = await db.catalog(
-    `SELECT doubt_id, question FROM catalog.doubts WHERE status = 'skipped'`).catch(() => []);
-  const nowAsking = new Map(doubts.map(d => [idFor(d.kind, d.subject), d.question]));
-  const rewritten = skipped.filter(s => nowAsking.has(s.doubt_id) && nowAsking.get(s.doubt_id) !== s.question);
-  if (rewritten.length) {
+  // A question comes back the moment the THING IT ASKS ABOUT changes, without
+  // waiting out the week. Two cases, and both happened on day one:
+  //
+  //   skipped, then reworded. Fede skipped "Is this limit set sensibly: history
+  //   horizon?" because it was unanswerable. Once the wording changes it is a
+  //   different question and holding back the readable version helps nobody.
+  //
+  //   denied, then FIXED. He denied the bike type query with "we don't own 255
+  //   guided bikes, what does bikes allocated mean exactly?" That was acted on
+  //   and the query rewritten. A denial is an answer to the OLD version; the new
+  //   one has never been seen, and without this it never would be, because
+  //   denied counts as decided forever.
+  //
+  // The comparison is on `proposed`, the artefact itself, not on the question
+  // text: for a canonical query the wording is fixed and the SQL is the thing
+  // that changes.
+  const decided = await db.catalog(
+    `SELECT doubt_id, question, proposed, status FROM catalog.doubts
+     WHERE status IN ('skipped','denied')`).catch(() => []);
+  const nowAsking = new Map(doubts.map(d => [idFor(d.kind, d.subject), d]));
+  const changed = decided.filter(s => {
+    const fresh = nowAsking.get(s.doubt_id);
+    if (!fresh) return false;
+    return String(fresh.proposed ?? '') !== String(s.proposed ?? '')
+        || (s.status === 'skipped' && fresh.question !== s.question);
+  });
+  if (changed.length) {
     await db.catalogWrite(`
       UPDATE catalog.doubts SET status = 'open', decided_by = NULL, decided_at = NULL
-      WHERE doubt_id IN (${rewritten.map(r => q(r.doubt_id)).join(',')});`);
-    console.log(`  ${rewritten.length} skipped doubt(s) reworded, so back in the queue.`);
+      WHERE doubt_id IN (${changed.map(r => q(r.doubt_id)).join(',')});`);
+    console.log(`  ${changed.length} doubt(s) changed since they were decided, so back in the queue.`);
   }
 
   const existing = new Set((await db.catalog(
