@@ -712,6 +712,85 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, "did we build this wrong?" Partly yes, and one fix made it worse
+
+Fede, after an evening of it: *"I was designing this whole thing to be smarter,
+to piece things together by itself... and I am running into a lot of time
+consuming dumb issues. Did we build this wrong? I also find it expensive, 3dkk
+on that stupid first query seems like a lot."*
+
+Two separate answers.
+
+**The Doubts queue was built wrong, and it was my mistake.** He asked for "atomic
+nuggets of doubts which I can confirm or deny". I turned that into an
+enumeration of every unreviewed row in the catalog: 244 cards, of which 174
+could not have been answered by anyone who had not read the schema. That made
+him the reviewer of the tool's own bookkeeping, which is the opposite of a tool
+that pieces things together by itself.
+
+Scrapped. Doubts now come from two places only, and neither is an enumeration:
+
+- a JOB that produced an uncertain result (the invoice parse flagged four of
+  seven PDFs; that uncertainty is real and about money);
+- an ANSWER that rested on an assumption only he can settle, raised in the
+  moment by the new `flag_doubt` tool and attached to the question that forced
+  it, one per answer maximum.
+
+Three cards left in the queue, all money. The evidence that this is right is his
+own session: the 255-bikes bug was caught because he looked at a real answer to
+a real question. The card was a batch simulation of a question he would have
+asked anyway.
+
+**On cost, I optimised the wrong thing and made it worse.** The theory was that
+the 25k-token briefing was expensive, so the schema block was cut from 57k chars
+to a 17k index with describe_table fetching the rest. Measured result:
+
+    uncached input per question   7,319  ->  27,643
+
+Worse, not better. A cached prefix is read at 0.1x; a tool result is not cached
+at all and is re-sent on every following turn of the same question. So the
+change moved 14k tokens from a tenth-price slot paid once into a full-price slot
+paid three or four times. Reverted.
+
+The actual decomposition of his 3.09 DKK question:
+
+    cache WRITE (one off, per hour)   73%
+    everything else                   27%
+
+The briefing was never the problem. It is written once an hour and shared by
+every question asked in that hour, so the fix for "the first question is
+expensive" is to ask a second one, not to shrink the prefix.
+
+**THE RULE THIS LEAVES BEHIND: frequency decides placement, not size.** Content
+needed on most questions belongs in the cached prefix however big it looks.
+Content needed occasionally belongs behind a tool. The gaps block stayed
+compacted (15k -> 4k) for a different and honest reason: forcing describe_gap
+makes behaviour rules 12 and 13 checkable, because the agent now has to fetch
+grain and join_key deliberately rather than skim them.
+
+**The model benchmark** (scripts/benchmark-models.js, his standing "measure,
+do not assume"). Three real questions, three models, same warehouse:
+
+    opus-5     2.45 DKK/question   37s
+    sonnet-5   1.04 DKK/question   21s
+    haiku-4.5  0.25 DKK/question   12s
+
+All three avoided the 255-bikes trap and the July-pax trap, which is the
+catalog working rather than the model: the canonical query and the "taken out"
+definition carry that correctness now, so a cheaper model inherits it.
+
+But **Haiku fabricated the freshness timestamp**, reporting "as of 14:35" when
+the snapshot is 22:35. That is an invented number in the one field that exists
+to be trustworthy, and it is disqualifying regardless of price. Opus and Sonnet
+both quoted it exactly. Sonnet also led with the reliability constraint rather
+than burying it, and Haiku leaked "I'll help you find..." preamble against the
+style rule.
+
+Two defects the benchmark found on its own: PRICE was hardcoded to Opus rates,
+so any non-Opus cost would have been silently misreported; and Haiku 4.5 rejects
+`thinking: {type: adaptive}` with a 400 on every call, which failed all three
+questions in one second.
+
 ### 2026-08-10, what Fede answered, and the fleet count that was 28x too big
 
 Fifteen doubts decided in the first session with the queue. Four produced real

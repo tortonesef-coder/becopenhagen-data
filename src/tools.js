@@ -76,6 +76,37 @@ const DEFINITIONS = [
     },
   },
   {
+    name: 'flag_doubt',
+    description:
+      'Raise ONE thing you had to assume to answer, where only Fede can settle it and getting it wrong would change ' +
+      'the answer. It appears in his Doubts queue attached to this question. ' +
+      'Use it RARELY: at most one per answer, and only when the assumption is load bearing. ' +
+      'Do NOT use it for anything checkable against the data (check it), anything already in the catalog (read it), ' +
+      'or anything that would not change the number (say it in the answer instead). ' +
+      'A queue of things he cannot answer or does not need to is worse than no queue.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'A plain question a busy person can answer yes or no to, in his words not yours. No table or column names.' },
+        assumed: { type: 'string', description: 'What you assumed, in one sentence.' },
+        why_it_matters: { type: 'string', description: 'What changes in the answer if the assumption is wrong. Concrete.' },
+      },
+      required: ['question', 'assumed', 'why_it_matters'],
+    },
+  },
+  {
+    name: 'describe_gap',
+    description:
+      'Full detail for one data gap: what exactly is missing, what it would unlock, what one row of it would be (grain) ' +
+      'and how it would join to bc.*. REQUIRED before offering a gap in an answer: behaviour rules 12 and 13 turn on the ' +
+      'grain and the join key, and the gaps list in your briefing shows neither.',
+    input_schema: {
+      type: 'object',
+      properties: { gap_key: { type: 'string', description: 'The gap_key from the gaps list.' } },
+      required: ['gap_key'],
+    },
+  },
+  {
     name: 'log_gap_hit',
     description:
       'Record that a known data gap was relevant to this question. Call at most ONCE per answer, and only when the gap ' +
@@ -188,6 +219,51 @@ async function execute(name, input, ctx) {
         description: src?.description, grain: src?.grain, gotchas: src?.gotchas,
         row_count: count, last_loaded_at: src?.last_loaded_at, max_date_in_data: src?.max_date_in_data,
         columns: cols,
+      };
+    }
+
+    case 'flag_doubt': {
+      // A doubt born from a real question, which is the only kind worth having.
+      //
+      // The pre-generated queue reached 244 cards by enumerating every
+      // unreviewed row in the catalog, and Fede said the obvious thing about
+      // it: "I am running into a lot of time consuming dumb issues... did we
+      // build this wrong?" He was right. Enumerating a catalog produces
+      // questions nobody asked; answering a question produces exactly the
+      // assumptions that mattered.
+      const q = String(input.question || '').trim();
+      if (!q) return { error: 'A doubt needs a question.' };
+      if (ctx.doubtRaised) {
+        return { error: 'One doubt per answer. You have already raised one; put anything else in the answer itself.' };
+      }
+      ctx.doubtRaised = true;
+
+      const id = 'db_ask_' + require('crypto').createHash('sha1')
+        .update(q.toLowerCase().replace(/\s+/g, ' ')).digest('hex').slice(0, 16);
+      await db.catalogWrite(`
+        INSERT OR REPLACE INTO catalog.doubts
+          (doubt_id, created_at, kind, subject, question, detail, proposed, impact,
+           priority, writeback_sql, status, decided_by, decided_at, note)
+        VALUES (${db.esc(id)}, now(), 'from_a_question',
+                ${db.esc(String(ctx.question || '').slice(0, 200))},
+                ${db.esc(q)},
+                ${db.esc(`You asked: "${ctx.question}"\n\nTo answer it I had to assume:\n${input.assumed}`)},
+                ${db.esc(input.assumed)}, ${db.esc(input.why_it_matters)},
+                1, NULL, 'open', NULL, NULL, NULL);`);
+      return { recorded: true, note: 'Raised for Fede. Say in your answer that you assumed it, in one sentence.' };
+    }
+
+    case 'describe_gap': {
+      const [g] = await db.catalog(
+        `SELECT gap_key, category, status, missing, contains, unlocks, grain, join_key,
+                how_to_get, effort, cost, cited_count
+         FROM catalog.gaps WHERE gap_key = ${db.esc(String(input.gap_key || ''))}`);
+      if (!g) return { error: `No gap called ${input.gap_key}. Use the gap_key exactly as it appears in the gaps list.` };
+      return {
+        ...g,
+        reminder: g.join_key && String(g.join_key).startsWith('none:')
+          ? 'COMPARISON ONLY. This can be compared in words and must never be computed with (behaviour rule 6).'
+          : 'Check the grain answers the question\'s level of detail before offering it (rule 12).',
       };
     }
 

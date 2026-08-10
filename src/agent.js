@@ -26,11 +26,32 @@ const MAX_TURNS = Number(process.env.AGENT_MAX_TURNS || 12);
 //
 // These drive the DKK budget below, so they are load-bearing rather than
 // decorative. Re-check them when the model changes.
-const PRICE = {
-  in: 5 / 1e6, out: 25 / 1e6, cacheRead: 0.5 / 1e6,
-  cacheWrite5m: 6.25 / 1e6,   // 1.25x input
-  cacheWrite1h: 10 / 1e6,     // 2x input. This app uses the 1 hour TTL, see below.
+// Per million tokens, in USD. Cache write is 1.25x input at the 5 minute TTL
+// and 2x at one hour; cache read is 0.1x input. Those multipliers are the same
+// for every model, so only in/out are listed and the rest is derived. Getting
+// this wrong does not break an answer, it silently misreports what the tool
+// costs, which is worse: nobody notices a wrong number they were not checking.
+const PRICING = {
+  'claude-opus-5':          { in: 5 / 1e6,    out: 25 / 1e6 },
+  'claude-sonnet-5':        { in: 3 / 1e6,    out: 15 / 1e6 },
+  'claude-haiku-4-5-20251001': { in: 1 / 1e6, out: 5 / 1e6 },
 };
+
+function priceFor(model) {
+  const p = PRICING[model] || PRICING['claude-opus-5'];
+  return {
+    in: p.in, out: p.out,
+    cacheRead: p.in * 0.1,
+    cacheWrite5m: p.in * 1.25,
+    cacheWrite1h: p.in * 2,
+  };
+}
+
+const PRICE = priceFor(MODEL);
+
+// Adaptive thinking and output_config.effort are Claude 5 features. Haiku 4.5
+// returns a 400 for both, so they are omitted rather than sent and caught.
+const SUPPORTS_ADAPTIVE_THINKING = /^claude-(opus|sonnet|fable)-5/.test(MODEL);
 
 function apiKey() {
   if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
@@ -81,6 +102,13 @@ async function budgetSettings() {
     `SELECT key, value FROM catalog.settings
      WHERE key IN ('query_budget_dkk','query_budget_max_dkk','usd_to_dkk','agent_effort','cache_ttl')`);
   const s = Object.fromEntries(rows.map(r => [r.key, r.value]));
+  // The benchmark has to let every question run to completion or the models are
+  // not being compared on the same work: a run that paused at 3 DKK and one that
+  // finished are two different answers to two different questions.
+  if (process.env.BENCH_NO_BUDGET === '1') {
+    return { soft: 1e9, hard: 1e9, rate: Number(s.usd_to_dkk ?? 6.9),
+             effort: s.agent_effort || 'high', cacheTtl: s.cache_ttl === '5m' ? '5m' : '1h' };
+  }
   return {
     soft: Number(s.query_budget_dkk ?? 3),
     hard: Number(s.query_budget_max_dkk ?? 10),
@@ -109,12 +137,17 @@ async function callApi(key, messages, system, effort) {
     body: JSON.stringify({
       model: MODEL,
       max_tokens: MAX_TOKENS,
-      // Thinking is on by default on this model; stated explicitly so the
-      // behaviour is visible in the code rather than implied. display stays
+      // Thinking is on by default on the Claude 5 models; stated explicitly so
+      // the behaviour is visible in the code rather than implied. display stays
       // omitted (the default): the reasoning is not shown to the user, and
       // asking for a summary would cost tokens nobody reads.
-      thinking: { type: 'adaptive' },
-      output_config: { effort },
+      //
+      // Haiku 4.5 rejects it outright ("adaptive thinking is not supported on
+      // this model"), which is a 400 on every single call, so a model that does
+      // not support it must not be sent it. Found by benchmarking: the Haiku run
+      // failed all three questions in one second flat.
+      ...(SUPPORTS_ADAPTIVE_THINKING ? { thinking: { type: 'adaptive' } } : {}),
+      ...(SUPPORTS_ADAPTIVE_THINKING ? { output_config: { effort } } : {}),
       system, messages, tools: tools.DEFINITIONS,
     }),
   });
@@ -189,7 +222,11 @@ async function ask({ question, username, history = [], resume = null }, emit = (
     { role: 'user', content: question },
   ];
 
-  const ctx = { sqlRun: [], assertionsFired: [], gapCited: null, canonicalUsed: null, contributions: [] };
+  // question is carried so flag_doubt can record WHICH question forced the
+  // assumption. A doubt without the question that produced it is just another
+  // orphaned card, which is what the pre-generated queue was.
+  const ctx = { sqlRun: [], assertionsFired: [], gapCited: null, canonicalUsed: null,
+                contributions: [], question, doubtRaised: false };
   const usage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
 
   return runLoop({

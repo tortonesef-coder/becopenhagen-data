@@ -83,6 +83,15 @@ style preferences.
     suggest it, so nobody expects a joined analysis that cannot be built. Those
     sources can be compared against in words and never computed with.
 14. Still one gap per answer, maximum.
+16. If answering forced you to ASSUME something that only Fede can settle, and
+    the answer would change if the assumption is wrong, call flag_doubt once and
+    say in one sentence that you assumed it. This is the only way doubts are
+    created now. A pre-generated queue of 244 questions was built by enumerating
+    the catalog and it was the wrong idea: it made him the reviewer of the
+    tool's own bookkeeping. Ask about what actually blocked THIS answer, or do
+    not ask. Never use it for something you could check with SQL or read in the
+    catalog: check it, or read it.
+
 15. Before your final answer, call report_sources_used and name ONLY the sources
     that actually carried it. Everything you queried is already recorded as
     merely referenced; this is for the one or two that the answer depended on.
@@ -128,7 +137,30 @@ understood it as a fleet count. If a figure could be read two ways, say in words
 which one it is, and give the comparison number beside it.
 `.trim();
 
-/** Compact schema summary: names, columns, one-line descriptions. Not sample data. */
+/**
+ * The full schema: every table, every column, every gotcha.
+ *
+ * MEASURED, then reverted. On 2026-08-10 this was cut to a bare index (57k
+ * chars down to 17k) to make questions cheaper, on the theory that most
+ * questions touch two or three tables and describe_table can fetch the rest.
+ *
+ * It made questions MORE expensive, and the numbers say why:
+ *
+ *   before   7,319 uncached input tokens per question
+ *   after   27,643
+ *
+ * A cached prefix is read at 0.1x. A tool result is not cached at all, and it
+ * is re-sent on every subsequent turn of the same question. So moving the
+ * column documentation out of the prefix moved 14k tokens from a tenth-price
+ * slot that is paid once into a full-price slot that is paid three or four
+ * times. The prefix was never the expensive part: 73% of the 3 DKK Fede
+ * complained about was the one-off cache WRITE, which is paid once an hour and
+ * shared by every question asked in that hour.
+ *
+ * THE RULE THIS LEAVES BEHIND: content that is needed on most questions belongs
+ * in the cached prefix, however big it looks. Content needed occasionally
+ * belongs behind a tool. Size is not the deciding factor, frequency is.
+ */
 async function schemaSummary() {
   const cols = await db.catalog(`
     SELECT table_name, column_name, data_type, description, gotcha, is_pii
@@ -217,16 +249,25 @@ async function gapsBlock() {
     '- status: gap = missing entirely. partial = we hold some of it already, so\n' +
     '  say which half. ingested = already here, not a gap.\n';
 
+  // ONE LINE EACH, not four. This block was 15k characters of gap catalogue on
+  // every question, and most questions never cite a gap at all. The first
+  // sentence of MISSING is enough to know whether a gap is relevant; describe_gap
+  // returns the grain, the join key and the full text for the one that is.
+  //
+  // Rule 12 and 13 still hold, and describe_gap is what makes them checkable:
+  // a gap must not be offered until its grain and join_key have been read, and
+  // now they have to be fetched deliberately rather than skimmed from a wall of
+  // text. Harder to offer a gap that cannot actually answer the question.
+  out += '\nOne line each. Before offering one, call describe_gap: rules 12 and 13\n' +
+         'require its grain and join_key, and they are not listed here.\n';
+
   for (const g of rows) {
-    out += `\n## ${g.gap_key} (${g.category}, ${g.status}, ${g.effort} effort`;
+    const first = String(g.missing).replace(/\s+/g, ' ').split(/(?<=\.)\s/)[0];
+    out += `\n- ${g.gap_key} (${g.status}, ${g.effort} effort`;
     if (g.cited_count > 0) out += `, cited ${g.cited_count}x`;
-    out += ')\n';
-    out += `MISSING: ${String(g.missing).replace(/\s+/g, ' ')}\n`;
-    out += `UNLOCKS: ${String(g.unlocks).replace(/\s+/g, ' ')}\n`;
-    out += `GRAIN: ${String(g.grain || 'unknown').replace(/\s+/g, ' ')}\n`;
-    out += `JOIN: ${String(g.join_key || 'unknown').replace(/\s+/g, ' ')}\n`;
+    out += `): ${first}`;
   }
-  return out;
+  return out + '\n';
 }
 
 /**
