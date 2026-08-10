@@ -583,10 +583,28 @@ Confirmed unharmed after every run: `fleet.db` still WAL, `PRAGMA quick_check`
 returns `ok`, bc-fleet answering HTTP 200, all three pm2 apps online. The
 crontab was backed up before editing and all five pre-existing lines are intact.
 
-Two small bugs found and fixed while building, both mine: `.backup` cannot share
-a `sqlite3` argument with a `PRAGMA` (it is a dot-command, not SQL), and
-`COALESCE(resolved_at, now())` mixes VARCHAR with TIMESTAMPTZ so the DATE cast
-has to happen on both sides first.
+Four bugs found and fixed while building, all mine. Two trivial: `.backup`
+cannot share a `sqlite3` argument with a `PRAGMA` (it is a dot-command, not
+SQL), and `COALESCE(resolved_at, now())` mixes VARCHAR with TIMESTAMPTZ so the
+DATE cast has to happen on both sides first.
+
+The other two would have been serious, and both were found by running the chain
+under a simulated cron environment rather than trusting that it worked:
+
+**`duckdb` lives in `/usr/local/bin`, which is not on cron's PATH.** Everything
+passed by hand and would have failed the moment cron ran it. Every script now
+sets PATH explicitly and checks `command -v duckdb` up front.
+
+**The archive swallowed that failure and reported success.** `N=$(duckdb ... 2>/dev/null | tail -1)`
+with `N=${N:-0}` turned "duckdb did not run" into "0 new rows", exit 0, against
+the one deadline that matters. Worse, the same defaulting on the high-water-mark
+read would have reset it to 0 and re-copied the entire table into a new part
+file, duplicating the archive. Both now abort loudly with a non-zero exit, and
+the row count and high-water mark are validated as integers before use.
+Verified after the fixes: 284,088 archived rows, 284,088 distinct ids.
+
+The lesson worth keeping: a backup or archive job that cannot fail loudly is
+worse than no archive at all, because it removes the reason to check.
 
 Not done, deliberately: nothing was deleted, bc-brain is still running, and the
 fleet app was not touched.

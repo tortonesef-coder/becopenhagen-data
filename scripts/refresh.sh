@@ -21,6 +21,9 @@
 # :20. This job stays out of both their way.
 
 set -uo pipefail
+
+export PATH="/usr/local/bin:/usr/bin:/bin"   # cron's PATH omits /usr/local/bin
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LOGDIR="/var/lib/bc-data/logs"
 mkdir -p "$LOGDIR"

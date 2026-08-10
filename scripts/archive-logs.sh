@@ -28,11 +28,18 @@
 
 set -uo pipefail
 
+# cron runs with PATH=/usr/bin:/bin, which does NOT include /usr/local/bin where
+# duckdb lives. Without this the script runs, reports "+0 rows" and exits 0
+# while archiving nothing at all - a silent failure against a hard deadline.
+export PATH="/usr/local/bin:/usr/bin:/bin"
+
 SNAP="/var/lib/bc-data/snapshots/fleet.db"
 ARCHIVE="/var/lib/bc-data/archive"
 STAMP=$(date -u '+%Y%m%dT%H%M%SZ')
 
 log() { echo "$(date -u '+%Y-%m-%d %H:%M:%S') $*"; }
+
+command -v duckdb > /dev/null || { log "FATAL: duckdb not on PATH"; exit 1; }
 
 if [ ! -f "$SNAP" ]; then
   log "FATAL: no snapshot at $SNAP. Run snapshot-fleet.sh first."
@@ -50,16 +57,25 @@ for T in $ID_TABLES; do
   mkdir -p "$DIR"
 
   # High-water mark straight out of the archive. No state file to go stale.
+  #
+  # Every failure below is FATAL rather than defaulting. Defaulting a failed
+  # high-water-mark read to 0 would re-copy the whole table into a new part file
+  # and duplicate the archive; defaulting a failed copy to "0 rows" would report
+  # success while losing rows the fleet app is about to delete. Both were real
+  # behaviours of the first version of this script.
   if compgen -G "$DIR/*.parquet" > /dev/null; then
-    HWM=$(duckdb -noheader -list -c \
-      "SELECT COALESCE(MAX(id), 0) FROM read_parquet('$DIR/*.parquet');" 2>/dev/null)
+    if ! HWM=$(duckdb -noheader -list -c \
+      "SELECT COALESCE(MAX(id), 0) FROM read_parquet('$DIR/*.parquet');"); then
+      log "FATAL: could not read the high-water mark for $T. Refusing to archive blind."
+      exit 2
+    fi
   else
     HWM=0
   fi
-  HWM=${HWM:-0}
+  case "$HWM" in (''|*[!0-9]*) log "FATAL: bad high-water mark '$HWM' for $T"; exit 2 ;; esac
 
   OUT="$DIR/part-${STAMP}.parquet"
-  N=$(duckdb -noheader -list -c "
+  if ! N=$(duckdb -noheader -list -c "
     INSTALL sqlite; LOAD sqlite;
     ATTACH '$SNAP' AS f (TYPE SQLITE, READ_ONLY);
     CREATE OR REPLACE TEMP VIEW newrows AS
@@ -67,8 +83,12 @@ for T in $ID_TABLES; do
     COPY (SELECT * FROM newrows ORDER BY id)
       TO '$OUT' (FORMAT PARQUET, COMPRESSION ZSTD);
     SELECT COUNT(*) FROM newrows;
-  " 2>/dev/null | tail -1)
-  N=${N:-0}
+  " | tail -1); then
+    log "FATAL: archiving $T failed."
+    rm -f "$OUT"
+    exit 2
+  fi
+  case "$N" in (''|*[!0-9]*) log "FATAL: bad row count '$N' for $T"; rm -f "$OUT"; exit 2 ;; esac
 
   # An empty part file is noise: drop it so the archive stays readable and the
   # high-water-mark scan does not slow down over thousands of empty hourly files.
@@ -84,12 +104,15 @@ done
 # Small and slow growing, so snapshot the whole thing each time into a single
 # file rather than trying to diff it.
 mkdir -p "$ARCHIVE/tour_reminders"
-duckdb -noheader -list -c "
+if ! duckdb -noheader -list -c "
   INSTALL sqlite; LOAD sqlite;
   ATTACH '$SNAP' AS f (TYPE SQLITE, READ_ONLY);
   COPY (SELECT * FROM f.tour_reminders ORDER BY availability_id)
     TO '$ARCHIVE/tour_reminders/current.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
-" > /dev/null 2>&1
+" > /dev/null; then
+  log "FATAL: archiving tour_reminders failed."
+  exit 2
+fi
 
 SIZE=$(du -sh "$ARCHIVE" 2>/dev/null | cut -f1)
 log "Archive: +$TOTAL_NEW rows this run, $SIZE on disk total."

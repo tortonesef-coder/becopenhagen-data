@@ -11,6 +11,10 @@
 
 set -uo pipefail
 
+# cron's PATH is /usr/bin:/bin and does not include /usr/local/bin, where duckdb
+# is installed. Without this the build fails under cron and only under cron.
+export PATH="/usr/local/bin:/usr/bin:/bin"
+
 BASE="/var/lib/bc-data"
 SQL="$(dirname "$0")/../sql/build-warehouse.sql"
 DEST="$BASE/warehouse.duckdb"
@@ -18,6 +22,7 @@ TMP="$BASE/.warehouse.duckdb.tmp"
 
 log() { echo "$(date -u '+%Y-%m-%d %H:%M:%S') $*"; }
 
+command -v duckdb > /dev/null      || { log "FATAL: duckdb not on PATH"; exit 1; }
 [ -f "$BASE/snapshots/fleet.db" ] || { log "FATAL: no snapshot"; exit 1; }
 [ -f "$SQL" ]                     || { log "FATAL: no $SQL"; exit 1; }
 

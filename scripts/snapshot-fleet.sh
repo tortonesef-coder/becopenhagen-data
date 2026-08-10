@@ -19,6 +19,8 @@
 
 set -uo pipefail
 
+export PATH="/usr/local/bin:/usr/bin:/bin"   # cron's PATH omits /usr/local/bin
+
 FLEET_DB="/var/www/becopenhagen-fleet/data/fleet.db"
 DEST_DIR="/var/lib/bc-data/snapshots"
 DEST="$DEST_DIR/fleet.db"

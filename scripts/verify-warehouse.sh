@@ -10,6 +10,8 @@
 
 set -uo pipefail
 
+export PATH="/usr/local/bin:/usr/bin:/bin"   # cron's PATH omits /usr/local/bin
+
 WH="/var/lib/bc-data/warehouse.duckdb"
 FLEET="/var/www/becopenhagen-fleet/data/fleet.db"
 FAILS=0
