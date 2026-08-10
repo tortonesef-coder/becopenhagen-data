@@ -113,6 +113,15 @@ Bike type codes: A adult, SA small adult, TB touring, E electric, GT/GTS guided 
 Tour bike counts come from FareHarbor resources (what was actually assigned); rental counts come from parsing booking text (what the customer ordered). They are not equally reliable.',
  'fede'),
 
+('bc.guide_identity', 'Guide name resolution', 'bc', 'view',
+ 'Maps every spelling of a guide''s name ever seen in any system to one canonical team member id.',
+ 'One row per distinct guide name string found anywhere in the data.',
+ 1, 'auto', 'Automatic, same hourly job. Built by scripts/resolve-guides.js.',
+ 'Guide names are typed by hand into FareHarbor crew notes, so the same person appears as "Federico Tortonese", "Federico" and worse. ALWAYS join guide questions on guide_id, never on the name string, or someone''s hours silently go missing from the total.
+The matching rules are ported from the fleet app''s own matcher (accents, known aliases such as Hasse for Hassan and Pam for Paloma, Levenshtein for typos) so the two apps agree on who is who.
+match_method = ''unresolved'' means the name reached nobody. That is a WARNING, not a build failure: a typo in a crew note must never freeze the hourly refresh. Those rows still carry the raw name, but they will not group with a person, so any per-guide total is short until someone adds the spelling.',
+ 'fede'),
+
 ('bc.departure_capacity', 'Harvested capacity', 'bc', 'view',
  'Per-departure seat capacity, mined out of the raw FareHarbor payloads that the fleet scraper writes to its change log and then discards.',
  'One row per availability_id that ever appeared in a FareHarbor payload.',
@@ -182,7 +191,12 @@ INSERT INTO catalog.limits (limit_key, rule, applies_to) VALUES
  'revenue, sales, income, "how much did we make"');
 
 -- ── GAPS ────────────────────────────────────────────────────────────────────
-DELETE FROM catalog.gaps WHERE cited_count = 0;
+-- ON CONFLICT rather than DELETE + INSERT, because cited_count is EARNED at
+-- runtime: every time the agent cites a gap it increments, and that count is
+-- what ranks the data roadmap. Deleting and reinserting would reset the roadmap
+-- to zero on every deploy. The earlier "DELETE WHERE cited_count = 0" was worse
+-- than useless: it left any gap that had ever been cited in place and then hit
+-- a primary key violation on reinsert, so the whole seed file aborted.
 INSERT INTO catalog.gaps (gap_key, missing, unlocks, how_to_get, effort) VALUES
 ('history_pre_2026',
  'Any booking, revenue or departure data before 2026-06-28.',
@@ -228,9 +242,16 @@ INSERT INTO catalog.gaps (gap_key, missing, unlocks, how_to_get, effort) VALUES
  'Which bike type each customer actually took on a rental.',
  'Which bikes earn their keep, and what to buy next.',
  'The FareHarbor customers report has it (bike_type per line item). Phase 5.',
- 'low');
+ 'low')
+ON CONFLICT (gap_key) DO UPDATE SET
+  missing    = excluded.missing,
+  unlocks    = excluded.unlocks,
+  how_to_get = excluded.how_to_get,
+  effort     = excluded.effort;
 
 -- ── SETTINGS ────────────────────────────────────────────────────────────────
-DELETE FROM catalog.settings WHERE key = 'query_log_retention_days';
-INSERT INTO catalog.settings (key, value, updated_at, updated_by) VALUES
-('query_log_retention_days', '180', now(), 'claude (proposed, awaiting Fede)');
+-- Retention lives in catalog-corrections.sql, NOT here, because Fede set it to
+-- 'forever' on 2026-08-10 and this file used to carry the earlier 180 day
+-- proposal. Re-running the seed silently reverted his decision, which the
+-- "history is kept forever" check caught. A seed file must never be able to
+-- overwrite a decision a person made.

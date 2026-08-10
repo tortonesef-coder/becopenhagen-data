@@ -36,6 +36,24 @@ if ! duckdb "$TMP" < "$SQL" > /dev/null; then
   exit 2
 fi
 
+# Guide identity: resolve every spelling of a person's name to one member_id.
+# Computed in Node because it needs accent stripping, aliases and Levenshtein.
+# It exits non-zero if any guide resolves to nobody, and that MUST fail the
+# build: an unresolved guide means someone's hours silently vanish from a
+# report, which is precisely the class of quiet wrong answer this project is
+# built to prevent. The script targets the temp warehouse via BC_WAREHOUSE.
+if ! BC_WAREHOUSE="$TMP" node "$(dirname "$0")/resolve-guides.js"; then
+  log "FATAL: guide name resolution failed, keeping the previous warehouse"
+  rm -f "$TMP" "$TMP.wal"
+  exit 2
+fi
+
+if ! duckdb "$TMP" < "$(dirname "$0")/../sql/resolve-guides-post.sql" > /dev/null; then
+  log "FATAL: attaching guide identity failed, keeping the previous warehouse"
+  rm -f "$TMP" "$TMP.wal"
+  exit 2
+fi
+
 # Verify before publishing. An empty or half-built warehouse must never replace
 # a working one: every number the tool reports would silently change.
 CHECK=$(duckdb "$TMP" -noheader -list -c "

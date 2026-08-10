@@ -40,11 +40,11 @@ records every place the spec turned out to be wrong.
 |---|---|
 | Repo | `tortonesef-coder/becopenhagen-data` |
 | Path | `/var/www/becopenhagen-data` |
-| pm2 process | `bc-data` (not created yet, phase 3) |
-| Subdomain | `data.becopenhagen.dk` (not in Caddy yet, phase 3) |
+| pm2 process | `bc-data` (**live**, port 4200) |
+| Subdomain | `data.becopenhagen.dk` (**Caddy ready, DNS points elsewhere**, see phase 3 log) |
 | Data directory | `/var/lib/bc-data/` (**live**, mode 700) |
 | Warehouse | `/var/lib/bc-data/warehouse.duckdb` (**live**, DuckDB 1.5.5) |
-| Port | to allocate. 3456 is bc-fleet, 4100 is bc-wiki, 3000 is the Life OS router |
+| Port | **4200**. 3456 is bc-fleet, 4100 is bc-wiki, 3000 is the Life OS router |
 
 ### Data directory layout
 
@@ -77,6 +77,7 @@ booking app, so never kill node processes broadly.
 | `bc-fleet` | The live fleet/booking app, `app.becopenhagen.dk` | 3456 | Owns `data/fleet.db` |
 | `bc-wiki` | Internal wiki, `wiki.becopenhagen.dk` | 4100 | Reads fleet.db read only for logins. The auth precedent |
 | `bc-brain` | Earlier analytics prototype, see section 5 | see `brain/.env` | Not in the spec. Overlaps this project heavily |
+| `bc-data` | This app, `data.becopenhagen.dk` | 4200 | Reads fleet.db read only for logins |
 | `router`, `list` | Life OS, unrelated | 3000 | Do not touch |
 
 ### Cron on this box
@@ -87,6 +88,7 @@ booking app, so never kill node processes broadly.
 0  6  * * 1  bc-brain weekly analyst briefing
 0  3  * * *  bc-fleet nightly backup
 30 3  * * *  bc-fleet backup watchdog
+35 *  * * *  bc-data refresh (snapshot, archive, rebuild, assertions)
 ```
 
 Any bc-data cron must not collide with the top of the hour, which already has
@@ -663,7 +665,8 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 |---|---|
 | 0. Read and report | **Done 2026-08-10** |
 | 1. Warehouse | **Done 2026-08-10.** Live, hourly, 22/22 verification checks passing |
-| 2. Catalog | **Done 2026-08-10**, except 9 tables of column drafts blocked on Anthropic API credit. `scripts/verify.sh` all green |
+| 2. Catalog | **Done 2026-08-10.** 130 columns documented, 23 definitions, 17 assertions |
+| 3. Agent and Ask page | **Built 2026-08-10.** Live under pm2 on port 4200. BLOCKED on DNS and API credit, see below |
 | 2. Catalog | Not started |
 | 3. Agent and Ask page | Not started |
 | 4. Audit session with Fede | Not started. Blocks phase 5 |
@@ -676,6 +679,60 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 ## 9. Session log
 
 Newest entry on top.
+
+### 2026-08-10, Phase 3: the tool exists, and guide names get resolved properly
+
+The app is built and running under pm2 as `bc-data` on port 4200. Express,
+shared fleet login restricted to `fede` and `soren`, Ask page with streaming,
+collapsed SQL, freshness chips, glossary hover, and the Sources, Dictionary and
+Gaps pages read-only for now.
+
+**Two things block Fede using it**, neither of which I can fix from here:
+
+1. **DNS.** `data.becopenhagen.dk` resolves to 94.231.103.180, not this VPS
+   (178.104.12.40). Caddy is configured and validated, and will pick up a
+   certificate automatically the moment the A record points here. Until then it
+   retries ACME every 60 seconds and fails.
+2. **Anthropic API credit.** Runtime queries are billed to the API by Fede's own
+   cost policy, and the balance is zero. The app returns a plain "the account
+   has no credit" message rather than a stack trace.
+
+**Guide names, after Fede's correction.** He said: "there is a reason why we had
+lots of different spelling, there is manual input in some parts of the system and
+we get spelling wrong but the system should still catch it. We don't build naive
+systems." So `scripts/resolve-guides.js` ports the fleet's own matcher (accents,
+aliases, Levenshtein, word-level) and builds `bc.guide_identity`, mapping every
+spelling to one `member_id`. Nine spellings resolve to eight people. Paloma and
+Féidhlim would both have been lost on a naive name join.
+
+`scripts/test-guide-matching.js` proves it against the live team table: 31 cases
+including `Fedrico`, `monika`, `Ibrahmi`, `andrw`, `Dimitraa`, `Hasse Sørensen`,
+and six pairs that must NEVER merge, because putting one guide's hours on another
+guide's invoice is worse than failing to match at all.
+
+**A design mistake his question exposed.** My first version exited non-zero on an
+unresolved name, which would have let one typo in a hand-typed crew note freeze
+the entire hourly refresh for everyone. It is now a loud warning plus the
+`unresolved_guide_names` assertion: the data keeps flowing and the odd name is
+impossible to miss. Availability beats purity when the input is human.
+
+**Also fixed, both caught by the checks rather than by me:**
+
+- `catalog-seed.sql` was not idempotent once a gap had been cited. Its
+  `DELETE WHERE cited_count = 0` left cited gaps in place and then hit a primary
+  key violation, aborting the whole seed. Now an upsert that preserves
+  `cited_count`, because that count is earned at runtime and ranks the roadmap.
+- The seed still carried the old 180 day query-log retention and silently
+  reverted Fede's "forever" every time it ran. Removed. **A seed file must never
+  be able to overwrite a decision a person made**, and the
+  "history is kept forever" check is what caught it.
+
+Verification is now 115 checks across six suites, all green, including 18 that
+prove the agent's safety without spending a cent: `run_sql` refuses CREATE, DROP,
+UPDATE, DELETE and ATTACH at the connection level; the fleet database is
+unreachable by name; the row cap and timeout hold; and **the July trap is
+BLOCKED with the numbers withheld**, while the same question asked properly still
+answers.
 
 ### 2026-08-10, Phase 2b: corrections are data, and a time column with two formats
 

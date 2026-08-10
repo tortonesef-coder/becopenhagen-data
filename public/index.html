@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BeCopenhagen Data</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<div id="login" class="login" hidden>
+  <form id="login-form" class="login-card">
+    <h1>BeCopenhagen Data</h1>
+    <p class="muted">Ask about tours, rentals, bikes and revenue.</p>
+    <label>Email<input type="email" id="email" autocomplete="username" required></label>
+    <label>Password<input type="password" id="password" autocomplete="current-password" required></label>
+    <button type="submit">Sign in</button>
+    <p class="error" id="login-error" hidden></p>
+    <p class="muted small">Same login as the Fleet app. Set or reset your password there.</p>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="brand">BeCopenhagen <span>Data</span></div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="ask">Ask</button>
+      <button class="tab" data-tab="sources">Sources</button>
+      <button class="tab" data-tab="dictionary">Dictionary</button>
+      <button class="tab" data-tab="gaps">Gaps</button>
+    </nav>
+    <div class="topright">
+      <span id="freshness" class="chip" title="When the data was last copied from the Fleet app"></span>
+      <button id="logout" class="linkish">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="tab-ask" class="tabpane active">
+      <div id="thread" class="thread">
+        <div class="welcome">
+          <h2>What do you want to know?</h2>
+          <p class="muted">Plain English. It will tell you when it cannot answer, which is
+             often, because this data only goes back to late June 2026.</p>
+          <div class="suggestions">
+            <button class="suggest">How full are our tours?</button>
+            <button class="suggest">Revenue by channel</button>
+            <button class="suggest">How many bikes are out on 15 August?</button>
+            <button class="suggest">Which guide has worked the most hours?</button>
+          </div>
+        </div>
+      </div>
+      <form id="ask-form" class="askbar">
+        <textarea id="question" rows="1" placeholder="Ask a question, or correct the answer above" autocomplete="off"></textarea>
+        <button type="submit" id="send" title="Send">Ask</button>
+      </form>
+      <p class="muted small askhint">
+        Replying to an answer with a correction is saved permanently and used from then on.
+      </p>
+    </section>
+
+    <section id="tab-sources" class="tabpane"><div class="loading">Loading…</div></section>
+    <section id="tab-dictionary" class="tabpane"><div class="loading">Loading…</div></section>
+    <section id="tab-gaps" class="tabpane"><div class="loading">Loading…</div></section>
+  </main>
+</div>
+
+<div id="tooltip" class="tooltip" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
