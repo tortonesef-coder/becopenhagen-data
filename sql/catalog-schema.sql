@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS catalog.statbank_tables (
 -- decision allows identified rows), so it has its own retention.
 CREATE TABLE IF NOT EXISTS catalog.query_log (
   id                  BIGINT PRIMARY KEY,
-  asked_at            TIMESTAMP,
+  asked_at            TIMESTAMP DEFAULT now(),
   username            VARCHAR,
   question            TEXT,
   sql_run             TEXT,
@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS catalog.settings (
 -- loop each one is, so nothing sits captured-but-ignored.
 CREATE TABLE IF NOT EXISTS catalog.corrections (
   id             BIGINT PRIMARY KEY,
-  said_at        TIMESTAMP,
+  said_at        TIMESTAMP DEFAULT now(),
   said_by        VARCHAR,
   correction     TEXT,      -- what they actually said, verbatim where possible
   context        TEXT,      -- what was being discussed, so it stays interpretable

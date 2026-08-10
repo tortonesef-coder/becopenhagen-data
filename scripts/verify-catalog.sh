@@ -89,6 +89,16 @@ check "every assertion records where its bound came from" \
 check "no assertion bound is still a guess" \
   "SELECT COUNT(*) FROM catalog.assertions WHERE bounds_source = 'guessed'" "0"
 
+# The question history is meant to last forever, so a question with no date is
+# a hole in it. agent.js passed asked_at as a literal null and every logged
+# question went in undated. Fixed in db.js and with a column DEFAULT; id 1 is
+# the one that was already broken and its real time is not recoverable, so it is
+# left NULL rather than given an invented timestamp.
+check "no question is logged without a date" \
+  "SELECT COUNT(*) FROM catalog.query_log WHERE asked_at IS NULL AND id > 1" "0"
+check "no correction is logged without a date" \
+  "SELECT COUNT(*) FROM catalog.corrections WHERE said_at IS NULL" "0"
+
 check "every gap says how to get it" \
   "SELECT COUNT(*) FROM catalog.gaps WHERE COALESCE(how_to_get,'') = ''" "0"
 # The amendment's v2 columns. grain and join_key are load-bearing: behaviour

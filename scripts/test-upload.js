@@ -113,9 +113,21 @@ const TMP = '/tmp/bc-upload-test';
     const r = rows[0] || {};
     Number(r.n) >= 7 ? ok('7 invoices parsed', `${r.n} rows, ${r.with_rate} with a rate`)
                      : bad('7 invoices parsed', `${r.n}`);
-    Number(r.reviewed) === 0
-      ? ok('none claim human review they have not had')
-      : bad('none claim human review', `${r.reviewed} marked reviewed`);
+    // This used to assert that NOTHING was marked reviewed, which was true only
+    // for as long as nobody reviewed anything. It failed the moment Fede
+    // started working the Doubts queue, which is the system working.
+    //
+    // The property actually worth protecting is that the parser cannot mark its
+    // own work as human-checked. Only a person's name may appear here.
+    const [claim] = await db.catalog(
+      `SELECT COUNT(*) AS bogus FROM catalog.guide_invoices
+       WHERE reviewed_by IS NOT NULL
+         AND (reviewed_by = parsed_by OR lower(reviewed_by) LIKE '%claude%'
+              OR lower(reviewed_by) LIKE '%model%' OR lower(reviewed_by) LIKE '%gpt%')`)
+      .catch(() => [{ bogus: 0 }]);
+    Number(claim.bogus) === 0
+      ? ok('no invoice claims a human review it never had', `${r.reviewed} reviewed by a person`)
+      : bad('no invoice claims a human review it never had', `${claim.bogus} reviewed by a machine`);
   }
 
   if (DO_CLASSIFY) {

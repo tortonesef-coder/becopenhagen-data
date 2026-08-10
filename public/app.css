@@ -292,3 +292,8 @@ details.sql .purpose { color: var(--muted); padding: .4rem .65rem 0; }
   content: attr(data-lang); display: block; font-size: .7rem; letter-spacing: .04em;
   text-transform: uppercase; color: var(--muted); margin-bottom: .35rem;
 }
+
+.notekept {
+  background: var(--accent-soft); color: var(--accent); border-radius: 8px;
+  padding: .5rem .7rem; margin-bottom: .7rem; font-size: .87rem; line-height: 1.45;
+}

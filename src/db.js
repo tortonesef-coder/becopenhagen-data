@@ -131,7 +131,12 @@ async function logQuery(entry) {
   const cols = ['asked_at', 'username', 'question', 'sql_run', 'result_summary', 'row_count',
     'assertions_fired', 'gap_cited', 'canonical_query_key', 'latency_ms',
     'input_tokens', 'output_tokens', 'cached_tokens', 'cost_usd', 'model', 'error'];
-  const vals = cols.map(c => esc(entry[c] ?? null)).join(',');
+  // asked_at is stamped HERE, not by the caller. agent.js passed null and the
+  // whole question history went in undated: "my question history should stay
+  // forever" is not worth much if nothing says when anything was asked. The
+  // column also has a DEFAULT now(), so this is belt and braces on purpose.
+  const vals = cols.map(c =>
+    (c === 'asked_at' && entry.asked_at == null) ? 'now()' : esc(entry[c] ?? null)).join(',');
   const [row] = await catalogWrite(
     `INSERT INTO catalog.query_log (id, ${cols.join(',')})
      VALUES (nextval('catalog.query_log_id'), ${vals}) RETURNING id;`);

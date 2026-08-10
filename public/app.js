@@ -850,7 +850,7 @@ function showDoubt(counts) {
   const note = el('textarea');
   note.className = 'doubt-note';
   note.rows = 2;
-  note.placeholder = 'If it is wrong, what is the right answer? (optional, but this is the bit that teaches it)';
+  note.placeholder = 'The right answer, or anything worth knowing. Whatever you write here is kept and used, even if you tick Correct.';
   card.appendChild(note);
 
   const row = el('div', 'budget-actions');
@@ -877,6 +877,15 @@ async function decideDoubt(id, decision, note) {
     showDoubt({ open: out.open, confirmed: '', denied: '', skipped: '' });
     const tally = $('#doubt-tally');
     if (tally) tally.textContent = `${out.open} left to check.`;
+    // Say what happened to the note. Ticking Correct and typing "no, it is 20%"
+    // is a real thing people do, and the two disagree, so the tick does not get
+    // to mark it verified on your behalf.
+    if (out.held_back) {
+      $('#doubt-slot')?.prepend(Object.assign(el('div', 'notekept'),
+        { textContent: 'Your note is saved and will be used. Because it might disagree with the tick, this one is not marked verified yet.' }));
+    } else if (out.note_kept) {
+      $('#doubt-slot')?.prepend(Object.assign(el('div', 'notekept'), { textContent: 'Note saved.' }));
+    }
     loadDoubtCount();
   } catch (e) {
     slot.innerHTML = '';

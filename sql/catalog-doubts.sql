@@ -27,7 +27,7 @@
 
 CREATE TABLE IF NOT EXISTS catalog.doubts (
   doubt_id     VARCHAR PRIMARY KEY,
-  created_at   TIMESTAMP,
+  created_at   TIMESTAMP DEFAULT now(),
   kind         VARCHAR,   -- column_description | canonical_query | invoice_figure
                           -- | assertion_bound | gap_estimate | upload_caveat
                           -- | correction | business_fact

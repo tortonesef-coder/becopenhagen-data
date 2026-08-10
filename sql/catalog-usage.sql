@@ -26,7 +26,7 @@
 
 CREATE TABLE IF NOT EXISTS catalog.source_usage (
   usage_id     BIGINT PRIMARY KEY,
-  used_at      TIMESTAMP,
+  used_at      TIMESTAMP DEFAULT now(),
   source_key   VARCHAR,     -- bc.<table>
   query_log_id BIGINT,      -- which question
   username     VARCHAR,
@@ -47,7 +47,7 @@ CREATE SEQUENCE IF NOT EXISTS catalog.source_usage_id START 1;
 -- do is add something nobody uses.
 CREATE TABLE IF NOT EXISTS catalog.curator_proposals (
   proposal_id  VARCHAR PRIMARY KEY,
-  created_at   TIMESTAMP,
+  created_at   TIMESTAMP DEFAULT now(),
   kind         VARCHAR,   -- merge_view | fills_gap | unused_source | missing_link | new_source
   title        VARCHAR,   -- one line, plain English
   rationale    TEXT,      -- why the curator thinks so

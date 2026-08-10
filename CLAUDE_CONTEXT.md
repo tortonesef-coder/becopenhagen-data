@@ -712,6 +712,53 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, a tick that overrode the person who ticked it
+
+Fede started working the Doubts queue and hit the worst bug in it within ten
+minutes. The card asked "Does Airbnb really take 25% commission?" He ticked
+**Correct** and typed **"No, it takes 20%"**.
+
+The tick won. The note was discarded, the rate stayed at 25%, and the
+write-back stamped the fact `verified = TRUE, confirmed_by = fede`. He had
+given the right answer and the system recorded the opposite under his name.
+That is the single worst outcome this project can produce: a wrong number
+wearing a human signature.
+
+Three changes, and the ordering of them is the reasoning:
+
+1. **Any note is a correction, whichever button was pressed.** Only denials
+   used to log one. A note is the field with information in it; the button is
+   one bit.
+2. **A confirmation that carries a note does NOT run the write-back.** The
+   write-back is what stamps "verified by a person". When the tick and the note
+   might disagree, no machine can tell which was meant, and the two failure
+   modes are not symmetric: asking again is cheap, marking a wrong number as
+   human-verified is not.
+3. The note placeholder invited the trap. It said "if it is wrong, what is the
+   right answer?", which reads as "type the correction here" regardless of which
+   button you then press. Now: "The right answer, or anything worth knowing.
+   Whatever you write here is kept and used, even if you tick Correct." The page
+   also says what happened to the note after each decision.
+
+Airbnb is now 0.20 in `catalog.channel_commission` and in the warehouse copy,
+with a correction row recording that it came from his note and that the note was
+nearly lost.
+
+**Also found, from the same session:**
+
+- **Every logged question was undated.** `agent.js` passed `asked_at: null` and
+  the column had no default, so "my question history should stay forever" was
+  being honoured with no dates on it. Stamped in `db.logQuery` now, plus
+  `DEFAULT now()` on the six event timestamp columns, plus two verify checks.
+  Query id 1 is left NULL: its real time is not recoverable and inventing one
+  would be a lie in a permanent record.
+- **A verify check was asserting the wrong property.** "No invoice is marked
+  reviewed" was true only until somebody reviewed one, and it failed the moment
+  Fede did. Rewritten to check what it meant: no invoice may claim a review by
+  the parser that wrote it.
+- **Fenced code rendered as one line.** `renderMarkdown` had no branch for ```
+  fences, so they fell through to the paragraph handler.
+
 ### 2026-08-10, two bugs Fede found by asking one real question
 
 He asked which guide had worked the most hours. The answer was right. Two things

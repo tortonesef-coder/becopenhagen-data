@@ -360,7 +360,14 @@ app.post('/api/doubts/:id/decide', requireAuth, async (req, res) => {
   try {
     // Confirming runs the write-back, so the thing is genuinely marked reviewed
     // rather than just ticked off a list.
-    if (decision === 'confirmed' && d.writeback_sql) {
+    //
+    // UNLESS a note came with it. The write-back is what stamps "verified by
+    // Fede" on a fact, and a tick that arrives with "No, it takes 20%" must
+    // never do that. When the tick and the note disagree the machine cannot
+    // tell which one was meant, and of the two failure modes, asking again is
+    // cheap and marking a wrong number as human-verified is not.
+    const stampedVerified = decision === 'confirmed' && d.writeback_sql && !note;
+    if (stampedVerified) {
       await db.catalogWrite(String(d.writeback_sql).replace(/\{user\}/g, db.esc(req.session.username)) + ';');
     }
 
@@ -370,14 +377,23 @@ app.post('/api/doubts/:id/decide', requireAuth, async (req, res) => {
         note = ${db.esc(note)}
       WHERE doubt_id = ${db.esc(id)};`);
 
-    // A DENIAL is the valuable half: the model believed something, a person
-    // said no, and the reason exists nowhere else. It becomes a correction,
-    // which feeds the prompt, so the same mistake is not made again.
-    if (decision === 'denied') {
+    // ANY NOTE IS A CORRECTION, whichever button was pressed.
+    //
+    // Fede ticked "correct" on "Does Airbnb really take 25% commission?" and
+    // typed "No, it takes 20%". The tick won, the note was discarded, the rate
+    // stayed at 25%, and the fact was marked verified by him. He had said the
+    // right answer and the system threw it away.
+    //
+    // The tick and the note can disagree, and when they do the note is the one
+    // with information in it. So it is always recorded, and a confirmation that
+    // carries a note is flagged for a second look rather than trusted.
+    if (decision === 'denied' || note) {
       await db.logCorrection({
         said_by: req.session.username,
         correction: note || `Denied: ${d.question}`,
-        context: `Doubt ${d.kind} on ${d.subject}. The model believed: ${String(d.proposed || '').slice(0, 500)}`,
+        context: `Doubt ${d.kind} on ${d.subject}.` +
+          (decision === 'confirmed' ? ' TICKED CORRECT BUT LEFT A NOTE, so the two may disagree.' : '') +
+          ` The model believed: ${String(d.proposed || '').slice(0, 500)}`,
         applies_to: d.subject,
       });
     }
@@ -389,7 +405,14 @@ app.post('/api/doubts/:id/decide', requireAuth, async (req, res) => {
 
     const [counts] = await db.catalog(
       `SELECT COUNT(*) FILTER (WHERE status='open') AS open FROM catalog.doubts`);
-    res.json({ ok: true, status: decision, open: counts.open });
+    // note_kept tells the page to say what happened to the note, so a person can
+    // see their own words landed somewhere rather than assuming a tick was the
+    // whole answer.
+    res.json({
+      ok: true, status: decision, open: counts.open,
+      note_kept: Boolean(note),
+      held_back: decision === 'confirmed' && Boolean(note) && Boolean(d.writeback_sql),
+    });
   } catch (e) {
     console.error('[doubts]', e.message);
     res.status(500).json({ error: e.message });
