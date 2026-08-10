@@ -27,10 +27,20 @@ The defining behavioural requirement is scepticism: the tool must say what it
 cannot know, name alternative explanations, and refuse causal-sounding sentences
 the data cannot support. A confident wrong answer is the primary failure mode.
 
-The full build specification is `spec_data.md`, committed alongside this file.
-Where this document and `spec_data.md` disagree, **this document wins**, because
-the spec was written before anyone had read the fleet schema. Section 6 below
-records every place the spec turned out to be wrong.
+The build specification is **two documents, and both must be read**:
+
+1. `spec_data.md` - the original spec.
+2. `amendment_01_sources.md` - amends it in three places: it REPLACES the
+   `catalog.gaps` schema in spec section 3.6, ADDS behaviour rules 11 to 14 to
+   spec section 5.2, and supplies the source catalogue those gaps are seeded
+   from. **Reading the spec without the amendment gives you the wrong gaps
+   schema and four missing behaviour rules.**
+
+Where any of the three disagree, **this document wins**, because the spec was
+written before anyone had read the fleet schema and the amendment was written
+before anyone had checked its join keys against it. Section 6 records every
+place the spec turned out to be wrong; section 6b does the same for the
+amendment.
 
 ---
 
@@ -337,6 +347,27 @@ Recorded so the errors are not rebuilt from the spec later.
 8. **§12.8 treats the brain as a curiosity.** It is the closest existing thing to
    this product and holds the only long history. It belongs in section 4, not in
    the open questions.
+
+### 6b. Where `amendment_01_sources.md` is wrong
+
+The amendment was written without checking its join keys against the schema.
+The seeded `catalog.gaps` rows carry the corrected version; this is the summary.
+
+1. **OTA back-ends "joins on listing and date"** - there is no listing id in
+   `bc.*`, only a coarse `channel` label. Applies to `own_listing_rank` too.
+2. **School holidays "daily by market"** - there is no customer country in
+   `bc.*`, so market cannot be derived except crudely from a phone prefix.
+3. **Payment processor "joins to booking"** - conditional on the processor
+   storing the FareHarbor reference; unverified.
+4. **"Maintenance log, possibly partly in bc-fleet"** - it is, and the amendment
+   should not have left this uncertain: `repair_tickets` holds the repairs. Only
+   parts and cost are missing.
+5. **"Rental transactions, if not fully in FareHarbor, confirm"** - confirmed
+   present. Not a gap.
+6. **Reviews "rating, text, date"** - `bc.guide_reviews` has NO RATING COLUMN.
+   The amendment implies bc-fleet holds ratings; it does not.
+7. **Section 9 says gaps "should be seeded during Phase 2"** - phase 2 was
+   already complete when the amendment arrived, so this landed after phase 3.
 
 ---
 
@@ -679,6 +710,57 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 ## 9. Session log
 
 Newest entry on top.
+
+### 2026-08-10, amendment 01: the gap catalogue, and three join keys that do not hold
+
+Applied `amendment_01_sources.md` in full. It amends the spec in three places
+and the spec must not be read without it (section 1 above).
+
+**`catalog.gaps` migrated to the 13 column schema**, preserving every row and
+every earned `cited_count` (`history_pre_2026` was on 9 and still is). Seeded to
+35 gaps across five categories. The two load-bearing new columns are `grain` and
+`join_key`: without them in the prompt, behaviour rules 12 and 13 cannot be
+honoured, so `context.js` now renders a gaps block carrying both, ranked by
+citation count. `verify-catalog.sh` fails if any gap lacks either.
+
+**Three of the amendment's join-key claims do not hold against the real schema**,
+and the seeded rows say so rather than repeating them:
+
+- **OTA back-ends: "joins on listing and date".** There IS NO LISTING ID in
+  `bc.*`. `bc.bookings.channel` is a coarse label and one channel can carry
+  several listings, so impressions cannot be attributed to a product without a
+  listing-to-product map that does not exist. Same problem on `own_listing_rank`.
+- **School holidays: "daily by market".** There IS NO CUSTOMER COUNTRY. The
+  fleet bookings table has a phone number and no country field, so market can
+  only be guessed from the phone prefix. Without it this joins on date alone and
+  loses the per-market precision that makes it the amendment's "sleeper".
+- **Payment processor: "joins to booking".** Only if the processor stores the
+  FareHarbor reference. If it does not, the join degrades to amount plus date,
+  which is ambiguous: 990 DKK appears 70 times in the ledger.
+
+**Three sources are already partly in bc-fleet** and are seeded `status='partial'`
+rather than `gap`, so the agent does not offer to add data it already has:
+maintenance (repairs yes, parts and cost no), payroll (hours yes, rates no) and
+reviews (logged yes, **no rating column exists at all**). **Rental transactions
+are fully present** (366 bookings, 439,392 DKK) and are recorded as `ingested`
+so nobody re-adds them.
+
+**Derived features built** (amendment section 6): `lead_time_days` on
+`bc.bookings`, calendar features on both `bc.bookings` and `bc.departures`,
+`is_repeat_customer` plus `customer_booking_seq`, and `bc.daily_bike_load` for
+the bikes half of capacity utilisation. **Blocked:** `holiday_flag` (needs the
+`public_holidays` gap, nothing else) and `pickup_curve` (computable from
+`bc.booking_pace` in principle, but rests on pax that is only reliable from
+2026-08-03, so about a week of completed departures today).
+
+**Behaviour rules 11 to 14 added**, which invalidates the cached prefix as
+expected: the block grew from 68k to 85k characters and the next question pays
+one uncached call, about 1.2 DKK once.
+
+A bug of mine on the way: the new rules quoted column names in backticks inside
+a backtick-delimited template literal, which terminated the string and **took
+the app down** until fixed. Caught within a minute by the health check, but a
+reminder that prose going into a template literal needs its quoting checked.
 
 ### 2026-08-10, the cache TTL was wrong for how this tool is actually used
 

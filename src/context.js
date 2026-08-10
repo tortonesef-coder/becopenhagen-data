@@ -71,6 +71,24 @@ style preferences.
     cannot know, name the alternative explanations when something is ambiguous,
     and volunteer what extra data would settle it.
 
+## How to cite a gap (amendment_01_sources.md section 8)
+
+11. Say what the gap would unlock FOR THE QUESTION JUST ASKED, not in general.
+    "If we had what each guide is paid, I could tell you whether F3 actually
+    makes money" is useful. "We should add accounting data" is not.
+12. NEVER suggest a gap whose "grain" cannot support the question. If someone
+    asks about one departure, monthly regional data is not the answer, and
+    offering it is worse than saying nothing. Check the grain before you offer.
+13. When a gap has "join_key" starting "none: comparison only", SAY SO when you
+    suggest it, so nobody expects a joined analysis that cannot be built. Those
+    sources can be compared against in words and never computed with.
+14. Still one gap per answer, maximum.
+
+Gaps also carry a "status". "partial" means bc-fleet already holds some of it
+and only the rest is missing: say which half exists, or you will offer to add
+data they already have. "ingested" means it is already in the warehouse and is
+not a gap at all.
+
 ## Two habits that matter more than the rest
 
 SUPPLY VERSUS DEMAND. Low passenger numbers on four departures is not a
@@ -155,6 +173,43 @@ async function limitsBlock() {
   return out;
 }
 
+/**
+ * The gaps, with the fields rules 11 to 14 depend on.
+ *
+ * grain and join_key are the load-bearing ones: without them in the prompt the
+ * agent cannot honour "never suggest a gap whose grain cannot support the
+ * question" or "say so when it is comparison only". Ranked by cited_count, so
+ * the ones that keep blocking real questions surface first.
+ */
+async function gapsBlock() {
+  const rows = await db.catalog(`
+    SELECT gap_key, category, missing, unlocks, grain, join_key, effort, status, cited_count
+    FROM catalog.gaps WHERE status <> 'rejected'
+    ORDER BY cited_count DESC, category, gap_key`);
+  if (!rows.length) return '';
+
+  let out = '# What we do NOT have\n\n' +
+    'Data that would improve answers but is not in the warehouse. Cite at most\n' +
+    'one per answer, only when relevant, and check grain and join_key first.\n' +
+    '\n- grain: what one row of it would be. If it cannot answer the question\'s\n' +
+    '  level of detail, do not offer it.\n' +
+    '- join_key: how it would connect to bc.*. "none: comparison only" means it\n' +
+    '  can be compared in words and NEVER computed with (behaviour rule 6).\n' +
+    '- status: gap = missing entirely. partial = we hold some of it already, so\n' +
+    '  say which half. ingested = already here, not a gap.\n';
+
+  for (const g of rows) {
+    out += `\n## ${g.gap_key} (${g.category}, ${g.status}, ${g.effort} effort`;
+    if (g.cited_count > 0) out += `, cited ${g.cited_count}x`;
+    out += ')\n';
+    out += `MISSING: ${String(g.missing).replace(/\s+/g, ' ')}\n`;
+    out += `UNLOCKS: ${String(g.unlocks).replace(/\s+/g, ' ')}\n`;
+    out += `GRAIN: ${String(g.grain || 'unknown').replace(/\s+/g, ' ')}\n`;
+    out += `JOIN: ${String(g.join_key || 'unknown').replace(/\s+/g, ' ')}\n`;
+  }
+  return out;
+}
+
 async function correctionsBlock() {
   // Things the users have said that exist in no database. This is knowledge
   // that would otherwise have died in a chat window.
@@ -172,10 +227,10 @@ async function correctionsBlock() {
 
 /** Builds the full static block. Called once at boot and on reload(). */
 async function build() {
-  const [schema, defs, limits, corrections] = await Promise.all([
-    schemaSummary(), definitionsBlock(), limitsBlock(), correctionsBlock(),
+  const [schema, defs, limits, gaps, corrections] = await Promise.all([
+    schemaSummary(), definitionsBlock(), limitsBlock(), gapsBlock(), correctionsBlock(),
   ]);
-  cached = [BUSINESS, defs, schema, limits, corrections, BEHAVIOUR]
+  cached = [BUSINESS, defs, schema, limits, gaps, corrections, BEHAVIOUR]
     .filter(Boolean).join('\n\n---\n\n');
   return cached;
 }

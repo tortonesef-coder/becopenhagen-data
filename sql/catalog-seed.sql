@@ -113,6 +113,16 @@ Bike type codes: A adult, SA small adult, TB touring, E electric, GT/GTS guided 
 Tour bike counts come from FareHarbor resources (what was actually assigned); rental counts come from parsing booking text (what the customer ordered). They are not equally reliable.',
  'fede'),
 
+('bc.daily_bike_load', 'Daily bike load', 'bc', 'view',
+ 'How many bikes were needed each day across tours and rentals, against the size of the fleet. The bikes half of capacity utilisation (amendment section 6); the seats half is fill_rate on bc.departures.',
+ 'One row per date on which anything was scheduled.',
+ 1, 'auto', 'Automatic, same hourly job.',
+ 'THE DENOMINATOR IS TODAY''S FLEET, FOR EVERY DATE. There is no history of when bikes were bought or retired (gap fleet_history), so a utilisation figure for a past date divides by a fleet size that may not have existed then. Directionally useful, precisely wrong: say so when quoting it.
+bikes_out is what was ALLOCATED, not what left the shop. There is no no-show data.
+Tour bike counts come from FareHarbor resources (what was actually assigned); rental counts come from parsing booking text (what the customer ordered). They are not equally reliable, and this table sums them.
+Peak observed is 65 bikes on 2026-10-02, a single large CUSTOM booking, against 104 active bikes.',
+ 'fede'),
+
 ('bc.guide_identity', 'Guide name resolution', 'bc', 'view',
  'Maps every spelling of a guide''s name ever seen in any system to one canonical team member id.',
  'One row per distinct guide name string found anywhere in the data.',

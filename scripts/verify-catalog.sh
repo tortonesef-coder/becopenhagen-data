@@ -91,6 +91,16 @@ check "no assertion bound is still a guess" \
 
 check "every gap says how to get it" \
   "SELECT COUNT(*) FROM catalog.gaps WHERE COALESCE(how_to_get,'') = ''" "0"
+# The amendment's v2 columns. grain and join_key are load-bearing: behaviour
+# rules 12 and 13 cannot be honoured for a gap that has neither.
+check "every gap has a grain" \
+  "SELECT COUNT(*) FROM catalog.gaps WHERE COALESCE(grain,'') = ''" "0"
+check "every gap says how it would join" \
+  "SELECT COUNT(*) FROM catalog.gaps WHERE COALESCE(join_key,'') = ''" "0"
+check "every gap has a valid category" \
+  "SELECT COUNT(*) FROM catalog.gaps WHERE category NOT IN ('internal','official','open','competitive','derived')" "0"
+check "every gap has a valid status" \
+  "SELECT COUNT(*) FROM catalog.gaps WHERE status NOT IN ('gap','investigating','ingested','rejected','partial')" "0"
 check "every limit says what it applies to" \
   "SELECT COUNT(*) FROM catalog.limits WHERE COALESCE(applies_to,'') = ''" "0"
 
@@ -128,6 +138,8 @@ note "columns drafted"    "SELECT COUNT(*) FROM catalog.columns"
 note "columns reviewed by a human" "SELECT COUNT(*) FROM catalog.columns WHERE reviewed_by IS NOT NULL"
 note "corrections captured" "SELECT COUNT(*) FROM catalog.corrections"
 note "corrections not yet acted on" "SELECT COUNT(*) FROM catalog.corrections WHERE status = 'new'"
+note "gaps (amendment v2 schema)" "SELECT COUNT(*) FROM catalog.gaps"
+note "gaps that are comparison-only" "SELECT COUNT(*) FROM catalog.gaps WHERE join_key LIKE 'none:%'"
 
 echo ""
 echo "Outstanding"

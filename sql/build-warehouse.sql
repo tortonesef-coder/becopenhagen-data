@@ -152,6 +152,15 @@ SELECT
     ELSE NULL
   END                                         AS fill_rate,
 
+  -- Calendar features (amendment section 6). Free, no source needed.
+  -- holiday_flag is deliberately absent: it needs the public_holidays gap.
+  dayname(CAST(a.start_date AS DATE))        AS departure_dow,
+  dayofweek(CAST(a.start_date AS DATE))      AS departure_dow_num,
+  weekofyear(CAST(a.start_date AS DATE))     AS departure_week,
+  monthname(CAST(a.start_date AS DATE))      AS departure_month_name,
+  strftime(CAST(a.start_date AS DATE), '%Y-%m') AS departure_ym,
+  (dayofweek(CAST(a.start_date AS DATE)) IN (0, 6)) AS departure_is_weekend,
+
   CAST(a.last_synced AS TIMESTAMP)            AS last_synced_at
 FROM fleet_raw.tour_availabilities a
 LEFT JOIN bc.products p            ON p.product_code = a.feed_id
@@ -273,8 +282,60 @@ SELECT
   customer_email,                         -- is_pii
   customer_phone,                         -- is_pii
   CAST(first_seen_at AS TIMESTAMP)        AS first_seen_at,
-  CAST(last_seen_at  AS TIMESTAMP)        AS last_seen_at
+  CAST(last_seen_at  AS TIMESTAMP)        AS last_seen_at,
+
+  -- ── Derived features (amendment_01_sources.md section 6) ────────────────
+  -- No new source needed, only computation over what is already here.
+
+  -- LEAD TIME: days between the sale and the tour. Computed from booked_date,
+  -- the REAL creation timestamp, not the effective fallback: for the 40% of
+  -- rows without one the fallback is when our sync first noticed the booking,
+  -- which would compress a genuinely old booking to near-zero lead and
+  -- understate the average. NULL is the honest answer for those rows.
+  --
+  -- Coverage is 424 of 710 (60%). Observed range -3 to 120 days, mean 10.
+  -- The four NEGATIVE values are real rows, not a bug: a booking recorded up
+  -- to three days AFTER its own departure, almost certainly a walk-in entered
+  -- late. Left as-is rather than clamped, so they stay visible.
+  CASE WHEN booking_created_at IS NOT NULL AND tour_start_date IS NOT NULL
+       THEN date_diff('day', CAST(booking_created_at AS DATE), CAST(tour_start_date AS DATE))
+  END                                     AS lead_time_days,
+
+  -- CALENDAR FEATURES on the departure date. holiday_flag is deliberately
+  -- ABSENT: it needs a holiday list, which is gap public_holidays. Everything
+  -- else here is free.
+  dayname(CAST(tour_start_date AS DATE))       AS departure_dow,
+  dayofweek(CAST(tour_start_date AS DATE))     AS departure_dow_num,
+  weekofyear(CAST(tour_start_date AS DATE))    AS departure_week,
+  monthname(CAST(tour_start_date AS DATE))     AS departure_month_name,
+  strftime(CAST(tour_start_date AS DATE), '%Y-%m') AS departure_ym,
+  (dayofweek(CAST(tour_start_date AS DATE)) IN (0, 6)) AS departure_is_weekend
 FROM fleet_raw.bookings;
+
+-- REPEAT CUSTOMER FLAG. Applied as a second pass because it needs the whole
+-- table in scope to know what "prior" means.
+--
+-- Keyed on lowercased email, which covers 517 of 710 bookings (73%); rentals
+-- are the weakest. A NULL email is NOT a first-time customer, it is an unknown
+-- one, so those rows get NULL rather than false.
+--
+-- The honest caveat, which the agent must repeat: this warehouse holds six
+-- weeks. A tourist returning next summer is invisible here, so a near-zero
+-- repeat rate measures the window, not the business. 36 email addresses
+-- currently have more than one booking.
+ALTER TABLE bc.bookings ADD COLUMN IF NOT EXISTS customer_booking_seq INTEGER;
+ALTER TABLE bc.bookings ADD COLUMN IF NOT EXISTS is_repeat_customer BOOLEAN;
+
+CREATE OR REPLACE TEMP TABLE _seq AS
+SELECT booking_ref,
+       ROW_NUMBER() OVER (PARTITION BY lower(customer_email)
+                          ORDER BY COALESCE(booked_date_effective, departure_date), booking_ref) AS seq
+FROM bc.bookings WHERE COALESCE(customer_email, '') <> '';
+
+UPDATE bc.bookings b SET
+  customer_booking_seq = s.seq,
+  is_repeat_customer   = (s.seq > 1)
+FROM _seq s WHERE s.booking_ref = b.booking_ref;
 
 -- ── Bikes per departure ─────────────────────────────────────────────────────
 -- bikes_needed is a JSON object like {"A":3,"GT":4}. Unnested here so that
@@ -399,6 +460,42 @@ SELECT
   date_diff('day', CAST(changed_at AS DATE), departure_date) AS days_before_departure
 FROM deduped
 WHERE prev_pax IS NULL OR pax <> prev_pax;
+
+-- ── Capacity utilisation, the fleet half ────────────────────────────────────
+-- Amendment section 6 asks for "pax over available seats, AND bikes out over
+-- fleet size". The seats half already exists as bc.departures.fill_rate; this
+-- is the bikes half, which has to be a DAY-level aggregate because a bike is a
+-- resource shared across every departure and rental on the same date.
+--
+-- THE HONEST LIMIT, which the agent must state whenever it uses this: the
+-- denominator is TODAY'S fleet, for every date. There is no history of when
+-- bikes were bought or retired (gap fleet_history), so a utilisation figure for
+-- a past date divides by a fleet size that may not have existed then. It is
+-- directionally useful and precisely wrong.
+CREATE OR REPLACE TABLE bc.daily_bike_load AS
+WITH fleet AS (SELECT COUNT(*) AS n FROM bc.fleet_bikes WHERE active = 1),
+tour_days AS (
+  SELECT departure_date AS d, SUM(total_bikes) AS tour_bikes, COUNT(*) AS departures
+  FROM bc.departures GROUP BY 1
+),
+rental_days AS (
+  SELECT pickup_date AS d, SUM(total_bikes) AS rental_bikes, COUNT(*) AS rental_slots
+  FROM bc.rental_slots GROUP BY 1
+)
+SELECT
+  COALESCE(t.d, r.d)                             AS load_date,
+  COALESCE(t.tour_bikes, 0)                      AS tour_bikes,
+  COALESCE(r.rental_bikes, 0)                    AS rental_bikes,
+  COALESCE(t.tour_bikes, 0) + COALESCE(r.rental_bikes, 0) AS bikes_out,
+  (SELECT n FROM fleet)                          AS fleet_size_today,
+  ROUND((COALESCE(t.tour_bikes, 0) + COALESCE(r.rental_bikes, 0))
+        * 1.0 / NULLIF((SELECT n FROM fleet), 0), 4) AS bike_utilisation,
+  COALESCE(t.departures, 0)                      AS departures,
+  COALESCE(r.rental_slots, 0)                    AS rental_slots,
+  dayname(COALESCE(t.d, r.d))                    AS dow,
+  (dayofweek(COALESCE(t.d, r.d)) IN (0, 6))      AS is_weekend
+FROM tour_days t FULL OUTER JOIN rental_days r ON r.d = t.d
+WHERE COALESCE(t.d, r.d) IS NOT NULL;
 
 -- ── Freshness ───────────────────────────────────────────────────────────────
 -- Every answer has to state "data as of". This is where that comes from.

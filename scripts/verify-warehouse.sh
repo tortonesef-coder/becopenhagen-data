@@ -76,9 +76,12 @@ check "bookings" \
 check "guide hour records" \
   "SELECT COUNT(*) FROM bc.guide_hours;" \
   "SELECT COUNT(*) FROM guide_tour_hours;" 5
+# Reviews are typed in by hand, often in batches after a busy weekend, so they
+# jump rather than trickle. Same age-scaled treatment as departures: 2 per
+# minute of snapshot age, floor 5.
 check "reviews" \
   "SELECT COUNT(*) FROM bc.guide_reviews;" \
-  "SELECT COUNT(*) FROM guide_reviews;" 2
+  "SELECT COUNT(*) FROM guide_reviews;" "$(( 5 + SNAP_AGE_MIN * 2 ))"
 check "active bikes" \
   "SELECT COUNT(*) FROM bc.fleet_bikes WHERE active=1;" \
   "SELECT COUNT(*) FROM bikes WHERE active=1;"
