@@ -263,12 +263,33 @@ Why it matters to this build:
   product called a growth story one week and a collapse the next off a 28 day
   window. Both are small-n and supply-versus-demand errors.
 
-**Open decision for Fede:** bc-data either absorbs bc-brain (its analytics.db
-becomes a `bc.*` source, its context.md becomes `catalog.definitions` and
-`catalog.limits`, bc-brain is retired) or the two run side by side answering the
-same questions differently. Building bc-data without deciding this produces two
-tools that disagree, which is precisely what `catalog.definitions` exists to
-prevent.
+**DECIDED 2026-08-10 (Fede): retire bc-brain, do not port `analytics.db`.**
+Stated reason: "I want the cleanest build", and the underlying data exists
+elsewhere. That reading is correct, with one caveat recorded below.
+
+What this means in practice:
+
+- `analytics.db` is **not** a bc-data source. Nothing is built on it.
+- The long history is not lost, because `analytics.db` was only ever derived.
+  Its source is FareHarbor, re-exportable at any time, and the three CSVs it was
+  last built from are still on disk at `brain/uploads/` (dated 2026-07-15).
+- The history therefore returns via **phase 5**, when the FareHarbor report
+  ingestion loads those same exports directly into the clean warehouse. Between
+  phase 1 and phase 5, bc-data can only see back to 2026-06-28 and must say so
+  in every answer rather than implying it has seen more.
+- What is worth salvaging from bc-brain is documentation, not data: `schema.txt`
+  and `context.md` seed `catalog.columns`, `catalog.definitions` and
+  `catalog.limits`; `load.js`'s report sniffing and basis validation are the
+  reference for the phase 5 ingestion. Read them, do not import them.
+- **Sequencing:** do not stop the `bc-brain` pm2 process until bc-data can
+  answer the same questions, otherwise there is a window where neither works.
+
+**CAVEAT, unresolved:** `scripts/backup.sh` backs up `fleet.db` only. Neither
+`brain/analytics.db` nor `brain/uploads/*.csv` is in any backup, local or
+off-site, and `brain/.gitignore` excludes both. If this VPS died today, the only
+surviving copy of the pre-2026-06-28 history would be FareHarbor's own records.
+Copy `brain/uploads/{bookings,sales,customers}.csv` somewhere backed up before
+anything is retired.
 
 ---
 
@@ -302,18 +323,72 @@ Recorded so the errors are not rebuilt from the spec later.
 
 ---
 
-## 7. Open questions
+## 7. Decisions taken
+
+### 2026-08-10, bc-brain
+
+Retire it, do not port its data. Full detail and the backup caveat in section 5.
+
+### 2026-08-10, log retention
+
+**Do not touch the fleet app. Archive everything in bc-data instead.**
+Fede's words: "I can't afford breaking the fleet app for now, so don't touch it,
+but I also don't want to lose data starting around 26th October, I want to save
+all data. We can debloat and clean later on if needed."
+
+So the known phantom-logging bug in `ical.js` (§4, 62% of `tour_change_log`)
+stays unfixed for now, and bc-data must become the permanent archive of the
+fleet's log tables before the first 120 day deletion.
+
+- **Hard deadline: 2026-10-26.** That is 120 days after the oldest surviving row
+  (2026-06-28). Nothing has been deleted yet. If the archive is not running by
+  then, log history starts disappearing and is not recoverable.
+- The archive is append-only: every hourly snapshot inserts log rows the archive
+  has not seen before and never deletes. It must cover `tour_change_log`,
+  `action_log`, `page_views`, `emails_sent`, `webhook_log`,
+  `admin_notifications` and `tour_reminders`.
+- **Store as compressed Parquet, not raw.** At the current rate
+  (283k rows / 6 weeks, ~1.6 KB per row because of the capped `raw_data` JSON
+  blob) the raw growth is roughly 11 GB a year against 29 GB free on a 38 GB
+  disk. Parquet with dictionary + zstd compression on data this repetitive
+  brings that under 1 GB a year with zero loss. This is what makes "save all
+  data" affordable without touching the fleet app.
+- Revisit the fleet-side bug fix once the fleet app is calm enough to change.
+  It would cut `tour_change_log` by ~62% at source and shrink `fleet.db` by
+  roughly 450 MB.
+
+### 2026-08-10, PII
+
+**Allow customer details when explicitly asked for.** Aggregate by default
+(behaviour rule 8 stands), but the agent may return an identified customer when
+the question is explicitly about one. Consequences to implement:
+
+- Flag `customer_name`, `customer_email`, `customer_phone` as `is_pii` in
+  `catalog.columns`, but do **not** block them from `run_sql` output.
+- Customer names, emails and phone numbers will therefore sometimes be sent to
+  the Anthropic API. Deliberate, per §8 of the spec.
+- `catalog.query_log` will contain PII inside stored SQL and result summaries.
+  It needs a retention period. Propose 180 days; confirm with Fede.
+- The login allowlist (`fede`, `soren` only) is now a privacy control, not just
+  a convenience. Do not let the wiki's "every active member gets a role" pattern
+  through.
+
+---
+
+## 7b. Open questions
 
 | # | Question | Status |
 |---|---|---|
 | 1 | Which FareHarbor reports does Fede download | **Answered from code.** Three: bookings (detailed), sales, customers. Column signatures in `brain/server.js` `sniffReport()`. Confirm nothing has been added since |
-| 2 | Can the report export be reached from the scraper session | **Unresolved.** Assessment in the phase 0 report. Needs one read-only probe |
+| 2 | Can the report export be reached from the scraper session | **Unresolved.** Assessment in the phase 0 report. Needs one read-only probe. Now higher priority: phase 5 is where the lost history comes back |
 | 3 | Exact fleet SQLite path | **Answered.** `/var/www/becopenhagen-fleet/data/fleet.db` |
-| 4 | Real assertion bounds | **Partly answered.** 104 active bikes today; per-tour capacity still needs Fede |
-| 5 | Booking date or departure date canonical | **Needs Fede.** Both columns exist, one is 40% NULL |
-| 6 | PII policy | **Needs Fede.** Fleet `bookings` holds name, email and phone on every row |
-| 7 | Confirm repo, subdomain, pm2 names | **Needs Fede.** Port not yet allocated |
-| 8 | The existing brain | **Answered.** Section 5. The real question is now absorb or coexist |
+| 4 | Real assertion bounds | **Blocked on Fede.** 104 active bikes today. Per-tour capacity exists in no database; the `bc.products` table must be hand-filled or no fill rate is computable |
+| 5 | Booking date or departure date canonical | **Needs Fede.** Both columns exist, one is 40% NULL. With bc-brain retired, departure date is the only one that works until phase 5 |
+| 6 | PII policy | **Answered.** Section 7 above |
+| 7 | Confirm repo, subdomain, pm2 names | **Repo confirmed and pushed 2026-08-10.** Port still not allocated |
+| 8 | The existing brain | **Answered and decided.** Sections 5 and 7 |
+| 9 | Are A3F and H3P still sold | **New.** Neither has run in the six weeks of data. If retired they must be excluded from averages |
+| 10 | `catalog.query_log` retention period | **New, from the PII decision.** Proposed 180 days |
 
 ---
 
@@ -335,6 +410,37 @@ Recorded so the errors are not rebuilt from the spec later.
 ## 9. Session log
 
 Newest entry on top.
+
+### 2026-08-10, Phase 0 decisions: retire the brain, archive the logs, allow PII
+
+First commit pushed (`f24748e`). Fede then took the three blocking decisions,
+recorded in full in section 7 and summarised here.
+
+**bc-brain is retired and its `analytics.db` will not be ported.** His reasoning
+was that the data lives elsewhere, and that is right: `analytics.db` was only
+ever derived from three FareHarbor CSV exports, which FareHarbor can reissue and
+which are still on disk at `brain/uploads/`. The cost is real but bounded: until
+phase 5 loads those exports into the clean warehouse, bc-data sees back to
+2026-06-28 only, so no year-on-year and no season comparison. This raises the
+priority of the §4.2 FareHarbor export investigation, since phase 5 is now the
+route by which the history returns rather than a convenience.
+
+Found while checking that claim: `scripts/backup.sh` covers `fleet.db` only.
+Neither `analytics.db` nor the source CSVs are in any backup, and `brain` gitignores
+both. Flagged to Fede; not acted on, because this session is read-and-report.
+
+**The fleet app must not be touched**, so the phantom-logging bug stays and
+bc-data becomes the permanent log archive instead. Hard deadline 2026-10-26,
+which is 120 days after the oldest surviving row. Storing the archive as
+compressed Parquet rather than raw is what keeps "save all data" inside the disk
+budget: roughly 11 GB a year raw, under 1 GB compressed, on 29 GB free.
+
+**PII is allowed on request**, aggregate by default. So `is_pii` becomes a label
+rather than a block, `catalog.query_log` needs a retention period (180 days
+proposed), and the two-user login allowlist is now a privacy control.
+
+Still blocking phase 1: the `bc.products` capacity table, which exists in no
+database and which every fill-rate number depends on.
 
 ### 2026-08-10, Phase 0: repo bootstrap, and the history that is not in fleet.db
 
