@@ -46,14 +46,27 @@ echo "Verifying $WH against the live fleet database"
 echo "(small differences are expected: the snapshot is up to an hour behind)"
 echo ""
 echo "Row counts"
-# Tolerance 150, not 25. The fleet's hourly scraper fetches four months forward
-# and can add sixty or more departures in a single run, so a snapshot taken
-# before it ran is legitimately that far behind. Observed 2026-08-10: 1142 in a
-# 14-minute-old snapshot against 1203 live. A verifier that cries wolf on normal
-# staleness gets ignored, which is worse than not having it.
+# The departure tolerance SCALES WITH SNAPSHOT AGE rather than being a fixed
+# number. The fleet's hourly scraper fetches four months forward and can add a
+# couple of hundred departures in one run, so how far the warehouse may
+# legitimately lag depends entirely on how long ago it was copied. A fixed
+# tolerance is wrong at both ends: it cries wolf on an hour-old snapshot (which
+# happened twice while building this, each time prompting a pointless raise) and
+# it misses a real divergence on a fresh one.
+#
+# 4 departures per minute of age, floor 25. Measured: the scraper added 173 in
+# one run, and it runs hourly.
+SNAP_AGE_MIN=$(duckdb "$WH" -noheader -list -c \
+  "SELECT CAST(date_diff('minute', loaded_at, now() AT TIME ZONE 'UTC') AS INTEGER) FROM bc.data_freshness;" 2>/dev/null)
+SNAP_AGE_MIN=${SNAP_AGE_MIN:-60}
+case "$SNAP_AGE_MIN" in (''|*[!0-9-]*) SNAP_AGE_MIN=60 ;; esac
+[ "$SNAP_AGE_MIN" -lt 0 ] && SNAP_AGE_MIN=0
+DEP_TOLERANCE=$(( 25 + SNAP_AGE_MIN * 4 ))
+echo "  (snapshot is ${SNAP_AGE_MIN} min old, so allowing ${DEP_TOLERANCE} departures of drift)"
+
 check "tour departures" \
   "SELECT COUNT(*) FROM bc.departures;" \
-  "SELECT COUNT(*) FROM tour_availabilities WHERE feed_type='tour';" 150
+  "SELECT COUNT(*) FROM tour_availabilities WHERE feed_type='tour';" "$DEP_TOLERANCE"
 check "rental slots" \
   "SELECT COUNT(*) FROM bc.rental_slots;" \
   "SELECT COUNT(*) FROM tour_availabilities WHERE feed_type='rental';" 10

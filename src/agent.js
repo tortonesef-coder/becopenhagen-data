@@ -19,13 +19,17 @@ const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS || 12000);
 const MAX_TURNS = Number(process.env.AGENT_MAX_TURNS || 12);
 
 // Verified against the claude-opus-5 model reference, 2026-08-10. Per million
-// tokens: $5 in, $25 out, cache read is 0.1x input, cache WRITE is 1.25x input
-// at the default 5 minute TTL (2x, i.e. $10, at the 1 hour TTL, which this app
-// does not use). Thinking tokens bill as output.
+// tokens: $5 in, $25 out, cache read is 0.1x input. Cache WRITE depends on the
+// TTL: 1.25x input at 5 minutes, 2x at 1 hour. This app uses the 1 hour TTL,
+// argued at the cache_control call site below. Thinking tokens bill as output.
 //
 // These drive the DKK budget below, so they are load-bearing rather than
 // decorative. Re-check them when the model changes.
-const PRICE = { in: 5 / 1e6, out: 25 / 1e6, cacheWrite: 6.25 / 1e6, cacheRead: 0.5 / 1e6 };
+const PRICE = {
+  in: 5 / 1e6, out: 25 / 1e6, cacheRead: 0.5 / 1e6,
+  cacheWrite5m: 6.25 / 1e6,   // 1.25x input
+  cacheWrite1h: 10 / 1e6,     // 2x input. This app uses the 1 hour TTL, see below.
+};
 
 function apiKey() {
   if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
@@ -74,13 +78,14 @@ async function freshness() {
 async function budgetSettings() {
   const rows = await db.catalog(
     `SELECT key, value FROM catalog.settings
-     WHERE key IN ('query_budget_dkk','query_budget_max_dkk','usd_to_dkk','agent_effort')`);
+     WHERE key IN ('query_budget_dkk','query_budget_max_dkk','usd_to_dkk','agent_effort','cache_ttl')`);
   const s = Object.fromEntries(rows.map(r => [r.key, r.value]));
   return {
     soft: Number(s.query_budget_dkk ?? 3),
     hard: Number(s.query_budget_max_dkk ?? 10),
     rate: Number(s.usd_to_dkk ?? 6.9),
     effort: s.agent_effort || 'high',
+    cacheTtl: s.cache_ttl === '5m' ? '5m' : '1h',
   };
 }
 
@@ -155,8 +160,23 @@ async function ask({ question, username, history = [], resume = null }, emit = (
 
   // The cached prefix. Order matters: the large invariant block first, then the
   // small volatile one, so the cache breakpoint sits after the invariant part.
+  //
+  // ONE HOUR TTL, NOT THE 5 MINUTE DEFAULT, and the reason is this app's actual
+  // usage pattern. The spec describes it as "idle for a week and then ten
+  // questions in an afternoon", and between two of those questions a person
+  // reads the answer and thinks, which takes more than five minutes. With the
+  // default TTL the ~17k token context block expires between almost every pair
+  // of questions, so nearly every question pays the cache WRITE premium
+  // (1.25x input) instead of the read price (0.1x).
+  //
+  // The 1 hour TTL costs more to write (2x rather than 1.25x) but survives
+  // those gaps. Measured on the real context block: ten questions in an
+  // afternoon cost about 7.3 DKK in cache charges at 5 minutes versus about
+  // 1.7 DKK at 1 hour. It is only worse for a single isolated question that is
+  // never followed up, which is not how this tool gets used.
   const system = [
-    { type: 'text', text: context.get(), cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: context.get(),
+      cache_control: { type: 'ephemeral', ttl: budget.cacheTtl } },
     { type: 'text', text: fresh.text },
   ];
 
@@ -177,9 +197,10 @@ async function ask({ question, username, history = [], resume = null }, emit = (
   }, emit);
 }
 
-function costOf(usage) {
+function costOf(usage, ttl = '1h') {
+  const write = ttl === '5m' ? PRICE.cacheWrite5m : PRICE.cacheWrite1h;
   return usage.input * PRICE.in + usage.output * PRICE.out +
-         usage.cacheWrite * PRICE.cacheWrite + usage.cacheRead * PRICE.cacheRead;
+         usage.cacheWrite * write + usage.cacheRead * PRICE.cacheRead;
 }
 
 /**
@@ -198,7 +219,7 @@ async function runLoop(state, emit = () => {}) {
     // expensive unit is a whole turn (it re-sends the conversation plus every
     // tool result), so stopping only after the limit is already blown would
     // routinely overshoot by a turn.
-    const spentDkk = costOf(usage) * budget.rate;
+    const spentDkk = costOf(usage, budget.cacheTtl) * budget.rate;
     const perTurn  = turn > 0 ? spentDkk / turn : 0;
     const projected = spentDkk + perTurn;
 
@@ -260,9 +281,7 @@ async function runLoop(state, emit = () => {}) {
   }
 
   const answer = state.answer;
-  const cost =
-    usage.input * PRICE.in + usage.output * PRICE.out +
-    usage.cacheWrite * PRICE.cacheWrite + usage.cacheRead * PRICE.cacheRead;
+  const cost = costOf(usage, budget.cacheTtl);
 
   const blocking = ctx.assertionsFired.filter(a => a.severity === 'block');
   const meta = {

@@ -680,6 +680,41 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, the cache TTL was wrong for how this tool is actually used
+
+Fede asked why the first question of the day costs more than the rest. Answering
+it properly turned up a real saving.
+
+Every question carries the same ~17k token block of schema, definitions and
+gotchas. Anthropic caches it: writing costs more than a normal token, reading
+costs a tenth. **But the default cache lifetime is five minutes**, and the spec
+describes this tool's usage as "idle for a week and then ten questions in an
+afternoon". Between two of those questions a person reads the answer and thinks,
+which takes longer than five minutes, so with the default nearly every question
+was paying the write premium instead of the read price.
+
+Switched to the 1 hour TTL. It costs more to write (2x input rather than 1.25x)
+but survives the gaps. Measured on the real block:
+
+| Ten questions spread over | 5 min TTL | 1 hour TTL | Saving |
+|---|---|---|---|
+| 1 hour | 7.33 DKK | 1.70 DKK | 77% |
+| 2 hours | 7.33 DKK | 2.82 DKK | 62% |
+| 4 hours | 7.33 DKK | 5.04 DKK | 31% |
+
+The one case where it loses is a single question never followed up, which costs
+0.44 DKK more. That is the trade, and it is the right way round for this tool.
+Set in `catalog.settings` as `cache_ttl`, so it is revisitable without a deploy
+if the usage pattern turns out different.
+
+**Also fixed: the departure tolerance in `verify-warehouse.sh` now scales with
+snapshot age** (25 + 4 per minute) instead of being a fixed number. The fleet
+scraper adds up to ~175 departures in one hourly run, so how far the warehouse
+may legitimately lag depends entirely on how old the snapshot is. A fixed
+tolerance cried wolf twice while building this, and each time I raised the
+number rather than fixing the shape of the check. A verifier that has to keep
+being loosened is measuring the wrong thing.
+
 ### 2026-08-10, a spending limit per question, and two pricing corrections
 
 Fede asked for a per-question budget: about 3 DKK, and if it hits or is heading

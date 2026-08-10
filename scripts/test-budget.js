@@ -15,7 +15,7 @@ const db = require('../src/db');
 
 // Same rates as src/agent.js, per million tokens. Verified against the
 // claude-opus-5 reference on 2026-08-10.
-const PRICE = { in: 5 / 1e6, out: 25 / 1e6, cacheWrite: 6.25 / 1e6, cacheRead: 0.5 / 1e6 };
+const PRICE = { in: 5 / 1e6, out: 25 / 1e6, cacheWrite: 10 / 1e6, cacheRead: 0.5 / 1e6 }; // 1h TTL
 const costOf = u => u.input * PRICE.in + u.output * PRICE.out +
                     u.cacheWrite * PRICE.cacheWrite + u.cacheRead * PRICE.cacheRead;
 
