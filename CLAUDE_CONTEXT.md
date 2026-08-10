@@ -712,6 +712,46 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, the benchmark found a warehouse bug, and the API limit was hit
+
+Full six-question run, three models. **Opus and Sonnet completed all six; Haiku
+managed one and then the API spending limit was reached**, which also means the
+live tool is down until Fede raises it in the console. Total spend logged today
+is 44.61 DKK, of which 41.51 is benchmarking I ran.
+
+    opus-5     3.16 DKK/question   51s
+    sonnet-5   0.83 DKK/question   21s
+
+**The important result is not the price.** Asked "how many bikes are out on 15
+August", Sonnet answered 6 and Opus answered about 20. Opus was right, and the
+bug was in bc.daily_bike_load: rentals were counted on pickup_date ONLY, so a
+ten day hire collected on the 11th showed three bikes out on the 11th and
+nothing for the nine days those bikes were actually in a customer's hands.
+
+On 15 August: 6 bikes on tours, plus 14 rental bikes still out from pickups
+between the 10th and the 14th. The view said 6. It is a CAPACITY question and
+the answer decides whether another booking fits, so understating it by two
+thirds is precisely the quiet wrong answer this project exists to prevent.
+
+Fixed by expanding each hire across its rental_days. Effects: a typical day
+roughly doubled, and the observed peak rose from 65 to 70 bikes out of 104. The
+bikes_within_fleet assertion and the daily_bike_load gotchas were updated to
+match, and bike_utilisation was understated on every single day before this.
+
+The benchmark was built to compare models and it found a data defect instead.
+Worth remembering: asking the same real question of several models is a cheap
+form of triangulation, and disagreement between them is a signal about the DATA,
+not only about the models.
+
+**On the model choice**, both remaining candidates avoided every known trap (the
+255-bikes reading, the July pax hole, the private-slot fill rate), which is the
+catalog doing the work rather than the model. The difference that showed up is
+scepticism: Opus questioned a canonical query's output and went digging; Sonnet
+trusted it and reported the number. That is worth something on exactly the
+questions where being wrong is expensive.
+
+Not decided. Fede has the numbers and the answers.
+
 ### 2026-08-10, "did we build this wrong?" Partly yes, and one fix made it worse
 
 Fede, after an evening of it: *"I was designing this whole thing to be smarter,

@@ -539,9 +539,32 @@ tour_days AS (
   SELECT departure_date AS d, SUM(total_bikes) AS tour_bikes, COUNT(*) AS departures
   FROM bc.departures GROUP BY 1
 ),
+-- A RENTAL IS OUT FOR EVERY DAY OF THE HIRE, not just the day it was collected.
+--
+-- This counted rentals on pickup_date only, so a 10 day hire collected on the
+-- 11th showed 3 bikes out on the 11th and nothing for the nine days after,
+-- while those bikes were in a customer's hands the whole time.
+--
+-- Found on 2026-08-10 by the model benchmark, of all things. Asked "how many
+-- bikes are out on 15 August" this view said 6. The true answer is about 20:
+-- 6 on tours plus 14 rental bikes still out from pickups on the 10th to the
+-- 14th. Opus questioned the number and went looking. Sonnet trusted it.
+--
+-- "How many bikes are out" is a CAPACITY question and the answer decides
+-- whether another booking fits. Understating it by two thirds is exactly the
+-- quiet wrong answer this project exists to prevent.
+--
+-- rental_days is the hire length, so a 1-D hire occupies its pickup day only.
 rental_days AS (
-  SELECT pickup_date AS d, SUM(total_bikes) AS rental_bikes, COUNT(*) AS rental_slots
-  FROM bc.rental_slots GROUP BY 1
+  SELECT d, SUM(total_bikes) AS rental_bikes, COUNT(*) AS rental_slots
+  FROM (
+    SELECT UNNEST(generate_series(pickup_date,
+                                  pickup_date + (GREATEST(COALESCE(rental_days, 1), 1) - 1),
+                                  INTERVAL 1 DAY))::DATE AS d,
+           total_bikes
+    FROM bc.rental_slots
+  )
+  GROUP BY 1
 )
 SELECT
   COALESCE(t.d, r.d)                             AS load_date,
