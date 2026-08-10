@@ -40,10 +40,25 @@ records every place the spec turned out to be wrong.
 |---|---|
 | Repo | `tortonesef-coder/becopenhagen-data` |
 | Path | `/var/www/becopenhagen-data` |
-| pm2 process | `bc-data` (not created yet) |
-| Subdomain | `data.becopenhagen.dk` (not in Caddy yet) |
-| Data directory | `/var/lib/bc-data/` (not created yet) |
+| pm2 process | `bc-data` (not created yet, phase 3) |
+| Subdomain | `data.becopenhagen.dk` (not in Caddy yet, phase 3) |
+| Data directory | `/var/lib/bc-data/` (**live**, mode 700) |
+| Warehouse | `/var/lib/bc-data/warehouse.duckdb` (**live**, DuckDB 1.5.5) |
 | Port | to allocate. 3456 is bc-fleet, 4100 is bc-wiki, 3000 is the Life OS router |
+
+### Data directory layout
+
+```
+/var/lib/bc-data/
+├── snapshots/fleet.db      hourly read-only copy of the live fleet database
+├── snapshots/_loaded_at    UTC timestamp of that copy, the "data as of" source
+├── archive/<table>/*.parquet   permanent, append-only, zstd. Never deleted
+├── warehouse.duckdb        the bc.* layer, rebuilt hourly, swapped atomically
+├── raw/                    phase 6, Statbank parquet landing
+└── logs/refresh.log        hourly job output, self-trimming at 5 MB
+```
+
+`duckdb` CLI is installed at `/usr/local/bin/duckdb`.
 
 Deploy line, at the end of every push:
 
@@ -449,12 +464,87 @@ the question is explicitly about one. Consequences to implement:
 
 ---
 
+## 7c. How the warehouse works
+
+Four scripts, chained by `scripts/refresh.sh`, hourly at **:35**. That minute is
+deliberate: the fleet's FareHarbor scraper runs at `:00` and holds a write lock
+on `fleet.db`, and the wiki curator runs at `:20`.
+
+| Script | Does |
+|---|---|
+| `snapshot-fleet.sh` | `sqlite3 .backup` of the live fleet DB, verified, then swapped in atomically |
+| `archive-logs.sh` | Appends new log rows to Parquet. The only defence against the 120 day retention |
+| `build-warehouse.sh` | Runs `sql/build-warehouse.sql`, verifies, swaps in atomically |
+| `verify-warehouse.sh` | Cross-checks 22 figures against the LIVE fleet DB. Run after any view change |
+
+Whole chain takes about 3 seconds.
+
+### Three design decisions worth not re-litigating
+
+**Materialised tables, not views over the attached SQLite file.** DuckDB permits
+one writer per file, so an hourly in-place rebuild would collide with any
+read-only query the app is running. Everything is built into a temp file and
+`mv`'d into place, so a reader gets either the whole old warehouse or the whole
+new one. The same atomic-swap pattern guards the snapshot.
+
+**The snapshot is converted to `journal_mode=DELETE`.** The `.backup` copy
+inherits WAL from the source, and a WAL-mode SQLite file needs its reader to be
+able to create a `-shm` sidecar, which DuckDB attaching `READ_ONLY` cannot. This
+write is to our own copy, never to `fleet.db`, which is still WAL and verified
+`ok` after every run.
+
+**The archive keys off autoincrement id and re-derives its high-water mark from
+the Parquet itself.** No state file to drift. Running it twice is a no-op, and a
+lost part file self-heals on the next run rather than corrupting the archive.
+
+### What compression bought
+
+`tour_change_log` is 450 MB in SQLite and **3.2 MB as zstd Parquet**, about 140x,
+because the data is overwhelmingly the same phantom value relogged every 90
+seconds by the known fleet bug. The projected growth of "save everything" drops
+from roughly 11 GB a year to well under 100 MB. The disk objection to Fede's
+"save all data" decision is gone.
+
+### The bc.* tables
+
+`departures`, `rental_slots`, `bookings`, `departure_bikes`, `guide_hours`,
+`guide_reviews`, `fleet_bikes`, `repairs`, `team`, `products`,
+`departure_capacity`, `booking_pace`, `data_freshness`.
+
+`bc.booking_pace` is the one that did not exist before: every real movement in a
+departure's pax, with `days_before_departure`. It is reconstructed from the
+archived change log, collapsing 283,928 raw log rows down to actual changes, and
+it is the only way to answer "how far ahead do people book". It only exists
+because the archive exists.
+
+### Capacity, as actually found in FareHarbor
+
+Harvested per departure from the payloads bc-fleet's scraper writes to
+`tour_change_log.raw_data` and then forgets. 432 departures carry a real
+FareHarbor number, 708 fall back to Fede's stated default, 5 are CUSTOM and get
+none. Two traps, both confirmed on 2026-08-10:
+
+- `raw_data` is capped at 4000 characters, so many payloads are truncated
+  mid-JSON. **Regex-scan it, never JSON-parse it.**
+- **`"capacity": null` is common and does not mean zero.** On L2P, L3P, F3P and
+  H3P it is null on *every* departure: no seat limit is configured at all.
+  Do **not** substitute `bookable_capacity`, which is derived from free BIKES,
+  not seats, and reaches 74 on L2P. It would be a catastrophic fill-rate
+  denominator.
+
+`fill_rate` is therefore deliberately NULL, not a guess, on CUSTOM (no limit)
+and on unsold private slots (open capacity, not an empty departure). The
+`pax <= capacity` assertion must be `warn`, never `block`: Fede overbooks
+privates on request.
+
+---
+
 ## 8. Phase status
 
 | Phase | Status |
 |---|---|
-| 0. Read and report | **Done 2026-08-10.** Awaiting approval |
-| 1. Warehouse | Not started. Blocked on approval |
+| 0. Read and report | **Done 2026-08-10** |
+| 1. Warehouse | **Done 2026-08-10.** Live, hourly, 22/22 verification checks passing |
 | 2. Catalog | Not started |
 | 3. Agent and Ask page | Not started |
 | 4. Audit session with Fede | Not started. Blocks phase 5 |
@@ -467,6 +557,39 @@ the question is explicitly about one. Consequences to implement:
 ## 9. Session log
 
 Newest entry on top.
+
+### 2026-08-10, Phase 1: the warehouse is live
+
+Built and running. `refresh.sh` chains snapshot, archive and rebuild hourly at
+`:35`, takes about 3 seconds, and `verify-warehouse.sh` cross-checks 22 figures
+against the live fleet database: all pass, including gross DKK matching to the
+krone (952,589) with zero money-parse failures. Mechanics in section 7c.
+
+Two things came out better than expected.
+
+**Compression settles the disk question.** `tour_change_log` is 450 MB in SQLite
+and 3.2 MB as zstd Parquet. "Save all data" now costs well under 100 MB a year
+instead of the ~11 GB I warned about, so Fede's decision to leave the fleet app
+alone carries no real storage penalty.
+
+**Booking pace turned out to be recoverable.** The archived change log records
+every movement in a departure's pax with a timestamp, so `bc.booking_pace`
+reconstructs how bookings accumulated in the run-up to each departure, with
+`days_before_departure`. That question was not answerable from any table in the
+fleet database directly. It exists only because the archive exists, and it would
+have started disappearing on 2026-10-26.
+
+Confirmed unharmed after every run: `fleet.db` still WAL, `PRAGMA quick_check`
+returns `ok`, bc-fleet answering HTTP 200, all three pm2 apps online. The
+crontab was backed up before editing and all five pre-existing lines are intact.
+
+Two small bugs found and fixed while building, both mine: `.backup` cannot share
+a `sqlite3` argument with a `PRAGMA` (it is a dot-command, not SQL), and
+`COALESCE(resolved_at, now())` mixes VARCHAR with TIMESTAMPTZ so the DATE cast
+has to happen on both sides first.
+
+Not done, deliberately: nothing was deleted, bc-brain is still running, and the
+fleet app was not touched.
 
 ### 2026-08-10, capacity turns out to be free
 
