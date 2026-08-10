@@ -712,6 +712,43 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, asking Fede questions he cannot answer, and Skip meaning never
+
+He reached the assertion-bound cards and said: "I just skipped another doubt
+like this one, I don't know how to handle it." The card read *"Is this limit set
+sensibly: history horizon?"* over a paragraph about date columns parsing wrong.
+
+He was right to skip it and the card was the thing at fault. Nothing in it was
+answerable by someone who has not read the schema, and asking anyway costs the
+only scarce resource in this system, his attention, while inviting a rubber
+stamp on something nobody checked. **A doubt only belongs in the queue if the
+answer lives in his head and nowhere else.**
+
+Thirteen measured bounds were being queued. Six turn on how the business really
+works and are genuinely his; seven are measured off the data and are mine, and
+they stay measured. The six are now phrased as the business question underneath
+the bound, with the consequence in the same terms:
+
+- "Could one single booking ever be worth more than 25,000 DKK?"
+- "Could you ever carry more than 2,000 passengers in a single month?"
+- "Can more bikes go out in one day than you actually own?"
+- "Can a tour ever end up MORE than full?"
+- "Six bookings are worth exactly 0 DKK. Are those free rides, or a mistake?"
+- "When a tour has only run a handful of times, would you rather see a
+  percentage or the raw numbers?"
+
+The other seven (history_horizon, no_july_occupancy, pax_before_2026_08_03,
+recovered_departures_overcount, unresolved_guide_names, unsold_private_slots,
+stale_snapshot) were deleted from the queue. They are engineering decisions
+recorded in this file; they do not need a signature.
+
+**SKIP MEANT NEVER.** A skipped doubt stopped being served (the queue only shows
+`open`) and counted as decided, so it was never regenerated. Pressing Skip
+silently deleted the question. Two fixes: skipped doubts return to the queue
+after seven days, and a skipped doubt whose wording has since CHANGED comes back
+immediately, because it is no longer the question that was declined. The
+rewritten fill_rate card came back on the first run.
+
 ### 2026-08-10, a tick that overrode the person who ticked it
 
 Fede started working the Doubts queue and hit the worst bug in it within ten

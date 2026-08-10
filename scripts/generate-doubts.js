@@ -72,21 +72,66 @@ const add = d => doubts.push(d);
     });
   }
 
-  // ── 3. Assertion bounds. Measured off six weeks, and the amendment is
-  // explicit that Fede should confirm them against real numbers.
+  // ── 3. Assertion bounds, but ONLY the ones a person can actually answer.
+  //
+  // This section used to queue every measured bound as "Is this limit set
+  // sensibly: history horizon?" with the raw engineering note underneath. Fede
+  // hit it and said, reasonably, "I don't know how to handle it." He was right
+  // to skip it. Nothing in that card was answerable by someone who has not read
+  // the schema, and asking anyway does two bad things: it wastes the only scarce
+  // resource here, his attention, and it invites a rubber stamp on something
+  // nobody actually checked.
+  //
+  // A bound measured off the data is MY call, and it stays measured. A bound
+  // that turns on how the business really works is HIS call, and there are six
+  // of those. Each is phrased as the business question underneath it, with the
+  // consequence of getting it wrong stated in the same terms.
+  const ASK_FEDE = {
+    revenue_per_booking_plausible: {
+      question: 'Could one single booking ever be worth more than 25,000 DKK?',
+      detail: 'The biggest booking in the data so far is 19,300 DKK for a tour and 10,800 for a rental.\n\nRight now anything above 25,000 gets flagged as "check this, it might be a mistake" before the tool quotes it.',
+      impact: 'Set too low and the tool second-guesses your genuinely big group bookings. Set too high and a parsing error worth ten times the real amount goes straight into a revenue total.',
+    },
+    monthly_pax_plausible: {
+      question: 'Could you ever carry more than 2,000 passengers in a single month?',
+      detail: 'The busiest month on record here is August 2026, with 294 passengers.\n\n2,000 is roughly seven times that. Anything above it is treated as a counting error rather than a record month.',
+      impact: 'If a query accidentally counts the same booking many times over, this is what catches it. If 2,000 is genuinely reachable in a peak summer, the check needs to move up.',
+    },
+    bikes_within_fleet: {
+      question: 'Can more bikes go out in one day than you actually own?',
+      detail: 'You have 104 active bikes. The busiest day in the data is 65 bikes out, on 2 October, from one large custom booking.\n\nThe tool currently warns whenever a day needs more bikes than the fleet holds.',
+      impact: 'If you ever borrow or hire in bikes for a big group, that is a real day, not an error, and the tool should not flag it. If you never do, then a day over 104 always means something is double-counted.',
+    },
+    fill_rate_is_a_proportion: {
+      question: 'Can a tour ever end up MORE than full?',
+      detail: 'You said private tours sell at max 16 but you will take more if people email and ask.\n\nSo the tool allows a tour to show up to 150% full before it treats the number as broken.',
+      impact: 'If you regularly squeeze in well beyond the stated maximum, the tool will wrongly call those real departures a bug. If you never go above the limit, anything over 100% is a capacity number gone wrong.',
+    },
+    zero_value_bookings: {
+      question: 'Six bookings are worth exactly 0 DKK. Are those free rides you gave away, or a mistake?',
+      detail: 'Four came through direct, two through Airbnb.\n\nIf they are genuine freebies the tool should name them when it reports an average, because six zeroes drag any average down.',
+      impact: 'Called wrong, either your revenue per booking reads low for no visible reason, or six real errors sit in the data unnoticed.',
+    },
+    small_n_fill_rate: {
+      question: 'When a tour has only run a handful of times, would you rather see a percentage or the raw numbers?',
+      detail: 'Right now anything computed from fewer than fifteen departures gets reported as raw counts ("4 of 6 seats sold, across 3 departures") instead of a percentage, because a percentage off three departures looks far more solid than it is.\n\nAs of today only A3 has run enough times to clear that bar, so this affects nearly every per-tour question.',
+      impact: 'Percentages off tiny numbers are how people talk themselves into decisions. But if you find the raw counts harder to read, the threshold can come down.',
+    },
+  };
+
   for (const r of await db.catalog(`
       SELECT assertion_key, message, severity, bounds_source FROM catalog.assertions
       WHERE bounds_source = 'measured'`)) {
+    const ask = ASK_FEDE[r.assertion_key];
+    if (!ask) continue;   // measured from the data: my call, and it stays measured
     add({
       kind: 'assertion_bound',
       subject: r.assertion_key,
-      question: `Is this limit set sensibly: ${r.assertion_key.replace(/_/g, ' ')}?`,
-      detail: `${r.message}\n\nSeverity: ${r.severity} (block = refuse to answer, warn = answer with a caution).\nThe bound was measured from six weeks of data, not chosen by anyone.`,
+      question: ask.question,
+      detail: ask.detail,
       proposed: r.message,
-      impact: r.severity === 'block'
-        ? 'Set too tight and the tool refuses to answer real questions. Set too loose and it never catches a wrong number.'
-        : 'Set wrong and the warning either never fires or fires on everything, which trains people to ignore it.',
-      priority: r.severity === 'block' ? 2 : 4,
+      impact: ask.impact,
+      priority: 3,
       writeback_sql: `UPDATE catalog.assertions SET bounds_source = 'stated_by_fede' WHERE assertion_key = ${q(r.assertion_key)}`,
     });
   }
@@ -148,6 +193,37 @@ const add = d => doubts.push(d);
   }
 
   // ── Write ─────────────────────────────────────────────────────────────────
+  //
+  // SKIP MEANS LATER, NOT NEVER. It did mean never: a skipped doubt stopped
+  // being served (the queue only shows 'open') and was never regenerated (it
+  // counted as decided), so pressing Skip silently deleted the question. Fede
+  // pressed it on three, including one he had no way to answer as written,
+  // which is exactly the case where the question should come back once it has
+  // been rewritten.
+  //
+  // A week is long enough not to nag and short enough that nothing is lost.
+  const [{ reopened }] = await db.catalogWrite(`
+    UPDATE catalog.doubts SET status = 'open', decided_by = NULL, decided_at = NULL
+    WHERE status = 'skipped' AND (decided_at IS NULL OR decided_at < now() - INTERVAL 7 DAY)
+    RETURNING 1 AS reopened;`).then(r => [{ reopened: r.length }]).catch(() => [{ reopened: 0 }]);
+  if (reopened) console.log(`  ${reopened} skipped doubt(s) put back in the queue. Skip means later, not never.`);
+
+  // And a skipped question that has since been REWRITTEN comes back straight
+  // away, without waiting out the week. Fede skipped "Is this limit set
+  // sensibly: history horizon?" because it was unanswerable as written. Once
+  // the wording changes it is a different question, and holding back the
+  // readable version because he declined the unreadable one helps nobody.
+  const skipped = await db.catalog(
+    `SELECT doubt_id, question FROM catalog.doubts WHERE status = 'skipped'`).catch(() => []);
+  const nowAsking = new Map(doubts.map(d => [idFor(d.kind, d.subject), d.question]));
+  const rewritten = skipped.filter(s => nowAsking.has(s.doubt_id) && nowAsking.get(s.doubt_id) !== s.question);
+  if (rewritten.length) {
+    await db.catalogWrite(`
+      UPDATE catalog.doubts SET status = 'open', decided_by = NULL, decided_at = NULL
+      WHERE doubt_id IN (${rewritten.map(r => q(r.doubt_id)).join(',')});`);
+    console.log(`  ${rewritten.length} skipped doubt(s) reworded, so back in the queue.`);
+  }
+
   const existing = new Set((await db.catalog(
     `SELECT doubt_id FROM catalog.doubts WHERE status <> 'open'`)).map(r => r.doubt_id));
 
