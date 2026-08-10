@@ -113,6 +113,25 @@ Bike type codes: A adult, SA small adult, TB touring, E electric, GT/GTS guided 
 Tour bike counts come from FareHarbor resources (what was actually assigned); rental counts come from parsing booking text (what the customer ordered). They are not equally reliable.',
  'fede'),
 
+('catalog.guide_invoices', 'Guide invoices (parsed)', 'catalog', 'raw',
+ 'What each guide actually charged, read out of the invoice PDFs they uploaded to the fleet app.',
+ 'One row per uploaded invoice.',
+ NULL, 'manual', 'node scripts/parse-invoices.js. Re-run after new invoices are uploaded; already-parsed ones are skipped unless --force.',
+ 'EVERY ROW WAS READ BY A MODEL AND REVIEWED BY NOBODY. reviewed_by is NULL on all of them. Treat the figures as a draft until somebody checks them against the PDFs.
+Covers 5 of 8 active guides and 3 billing periods, so it is NOT a complete payroll picture and must never be totalled as if it were.
+Three specific problems the parse found, all needing a human: Monica''s invoice has the template placeholder [0.00] in the total field (subtotal is 20,575 DKK); one Ibrahim file is a Donkey Republic bike rental receipt, not a guide invoice; Feidhlim''s invoice is issued by Gleeson Translation Services and numbered 1 despite the filename saying 2.
+RATES ARE NOT UNIFORM: four guides bill 250 DKK/h, Paloma bills 130 and 150 DKK/h on different line types. There is no single guide rate.
+hours_claimed is what the GUIDE claimed, which is not the same as bc.guide_hours, which is what the fleet app computed. Comparing the two is a real check, not an error.',
+ 'fede'),
+
+('catalog.uploads', 'Uploaded files', 'catalog', 'raw',
+ 'Every file uploaded on the Sources page, what the classifier made of it, and whether a person accepted it.',
+ 'One row per uploaded file.',
+ NULL, 'auto', 'Written by the upload route. Nothing to run.',
+ 'status tells you where a file is: proposed means nobody has decided yet, ingested means it is in the warehouse, rejected means it was discarded and the file deleted.
+The classifier PROPOSES. Everything in what_it_is, grain, join_key and fills_gap is a model reading a preview, confirmed by a person but not hand-verified column by column.',
+ 'fede'),
+
 ('bc.dialling_codes', 'Dialling code lookup', 'bc', 'view',
  'Maps an international phone prefix to a country and market label. Hand maintained, longest prefix wins.',
  'One row per country dialling code.',

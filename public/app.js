@@ -398,6 +398,8 @@ async function renderTab(tab) {
     if (tab === 'sources') {
       const rows = await api('/api/sources');
       pane.innerHTML = '';
+      pane.appendChild(buildDropZone());
+      await renderPendingUploads(pane);
       pane.appendChild(el('p', 'muted small',
         'Where every number comes from, and what will bite you. Freshness is checked hourly.'));
       for (const s of rows) {
@@ -453,6 +455,150 @@ async function renderTab(tab) {
   } catch (e) {
     pane.innerHTML = '';
     pane.appendChild(Object.assign(el('div', 'error'), { textContent: e.message }));
+  }
+}
+
+// ── Upload ─────────────────────────────────────────────────────────────────
+// Drop a file, a model reads it and says what it thinks it is, you confirm.
+// Nothing reaches the warehouse until you have said yes: a model reading a
+// spreadsheet header is a good guess, and a wrong guess accepted silently would
+// be believed by every answer built on it afterwards.
+function buildDropZone() {
+  const box = el('div', 'dropzone');
+  box.innerHTML =
+    '<b>Add a data file</b>' +
+    '<p class="muted small">Drop a CSV, Excel, PDF or JSON here, or click to choose. ' +
+    'It gets read and described, and you decide whether to keep it. ' +
+    'Reading a file costs about 1 to 3 DKK.</p>';
+  const input = el('input');
+  input.type = 'file';
+  input.hidden = true;
+  box.appendChild(input);
+
+  const go = f => f && sendUpload(f, box);
+  box.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => go(input.files[0]));
+  box.addEventListener('dragover', e => { e.preventDefault(); box.classList.add('over'); });
+  box.addEventListener('dragleave', () => box.classList.remove('over'));
+  box.addEventListener('drop', e => {
+    e.preventDefault(); box.classList.remove('over');
+    go(e.dataTransfer.files[0]);
+  });
+  return box;
+}
+
+async function sendUpload(file, box) {
+  const status = el('div', 'upload-status');
+  status.textContent = `Reading ${file.name}...`;
+  box.appendChild(status);
+
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('/api/sources/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    status.remove();
+    box.parentElement.insertBefore(proposalCard(data), box.nextSibling);
+  } catch (e) {
+    status.className = 'upload-status error';
+    status.textContent = e.message;
+  }
+}
+
+function proposalCard(d) {
+  const card = el('div', 'card proposal');
+  const h = el('h3', null, d.proposed_name || d.original_name || 'Uploaded file');
+  if (!d.usable) h.appendChild(Object.assign(el('span', 'badge red'), { textContent: 'not usable' }));
+  card.appendChild(h);
+
+  card.appendChild(el('p', null, d.what_it_is));
+  if (d.grain) card.appendChild(el('p', 'muted small', `One row = ${d.grain}`));
+  if (d.join_key) {
+    const j = el('p', 'muted small');
+    j.textContent = String(d.join_key).startsWith('none:')
+      ? 'Cannot be joined to your existing data: usable for comparison only.'
+      : `Connects to your data via ${d.join_key}`;
+    card.appendChild(j);
+  }
+
+  if (d.fills_gap) {
+    const g = el('div', 'gap');
+    g.appendChild(el('b', null, 'Fills a known gap: '));
+    g.appendChild(document.createTextNode(
+      `${String(d.fills_gap).replace(/_/g, ' ')} (${d.gap_confidence} confidence). ${d.gap_reasoning || ''}`));
+    card.appendChild(g);
+  }
+
+  const pii = (d.columns || []).filter(c => c.is_pii);
+  if (pii.length) {
+    card.appendChild(Object.assign(el('div', 'assertion warn'), {
+      textContent: `Contains personal data: ${pii.map(c => c.name).join(', ')}.`,
+    }));
+  }
+  if (d.caveats) {
+    card.appendChild(Object.assign(el('div', 'assertion warn'), { textContent: d.caveats }));
+  }
+
+  if ((d.columns || []).length) {
+    const det = el('details', 'sql');
+    det.appendChild(el('summary', null, `${d.columns.length} columns`));
+    const pre = el('pre');
+    pre.textContent = d.columns.map(c =>
+      `${c.name} (${c.type})${c.is_pii ? ' [personal]' : ''}\n    ${c.description}`).join('\n');
+    det.appendChild(pre);
+    card.appendChild(det);
+  }
+
+  card.appendChild(el('p', 'attribution',
+    `Read by ${d.file_kind} reader, cost ${Number(d.cost_dkk || 0).toFixed(2)} DKK`));
+
+  if (d.usable) {
+    const row = el('div', 'budget-actions');
+    const keep = el('button', 'budget-go', 'Keep it');
+    const drop = el('button', 'budget-stop', 'Discard');
+    keep.addEventListener('click', () => decideUpload(d.upload_id, 'confirm', card));
+    drop.addEventListener('click', () => decideUpload(d.upload_id, 'reject', card));
+    row.appendChild(keep); row.appendChild(drop);
+    card.appendChild(row);
+  } else {
+    const row = el('div', 'budget-actions');
+    const drop = el('button', 'budget-stop', 'Discard');
+    drop.addEventListener('click', () => decideUpload(d.upload_id, 'reject', card));
+    row.appendChild(drop);
+    card.appendChild(row);
+  }
+  return card;
+}
+
+async function decideUpload(id, decision, card) {
+  card.querySelector('.budget-actions')?.remove();
+  const status = el('p', 'muted small', decision === 'confirm' ? 'Loading it in...' : 'Discarding...');
+  card.appendChild(status);
+  try {
+    const out = await api(`/api/sources/upload/${id}/decide`, { method: 'POST', body: { decision } });
+    if (out.status === 'ingested') {
+      status.textContent = `Added as ${out.table} with ${Number(out.rows).toLocaleString()} rows.` +
+        (out.gap_closed ? ` The "${String(out.gap_closed).replace(/_/g, ' ')}" gap is now filled.` : '');
+      status.className = 'muted small done';
+    } else {
+      status.textContent = 'Discarded.';
+      setTimeout(() => card.remove(), 1200);
+    }
+  } catch (e) {
+    status.className = 'error';
+    status.textContent = e.message;
+  }
+}
+
+async function renderPendingUploads(pane) {
+  let rows = [];
+  try { rows = await api('/api/sources/uploads'); } catch { return; }
+  const pending = rows.filter(r => r.status === 'proposed');
+  if (!pending.length) return;
+  pane.appendChild(el('p', 'muted small', `${pending.length} uploaded file(s) waiting for a decision:`));
+  for (const r of pending) {
+    pane.appendChild(proposalCard({ ...r, columns: [], usable: true, cost_dkk: r.classify_cost_dkk }));
   }
 }
 

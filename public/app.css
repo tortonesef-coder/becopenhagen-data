@@ -203,3 +203,18 @@ details.sql .purpose { color: var(--muted); padding: .4rem .65rem 0; }
 .budget-stop { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
 .budget-stop:hover { border-color: var(--amber); color: var(--amber); }
 .attribution.over { color: var(--amber); font-weight: 600; }
+
+/* ── Upload drop zone ───────────────────────────────────────────────────── */
+.dropzone {
+  border: 2px dashed var(--line); border-radius: var(--radius);
+  padding: 1.4rem 1.1rem; margin-bottom: 1rem; text-align: center;
+  cursor: pointer; background: var(--card); transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone b { display: block; margin-bottom: .2rem; }
+.dropzone p { margin: 0; }
+.upload-status { margin-top: .7rem; font-size: .88rem; color: var(--muted); }
+.upload-status.error { color: var(--red); }
+.card.proposal { border-left: 3px solid var(--accent); }
+.card.proposal .budget-actions { margin-top: .8rem; }
+.muted.done { color: var(--accent); font-weight: 600; }

@@ -156,6 +156,116 @@ app.post('/api/correction', requireAuth, async (req, res) => {
   }
 });
 
+// ── Upload: propose, then confirm ───────────────────────────────────────────
+// Nothing reaches the warehouse until a person has read what the classifier
+// made of the file and said yes. See src/uploads.js for why.
+const multer = require('multer');
+const uploads = require('./uploads');
+const classify = require('./classify');
+const ingest = require('./ingest');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: uploads.MAX_BYTES } });
+
+app.post('/api/sources/upload', requireAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file received.' });
+
+  let record;
+  try {
+    record = uploads.store(req.file.buffer, req.file.originalname, req.file.mimetype, req.session.username);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+
+  try {
+    const [{ value: rate } = {}] = await db.catalog(
+      `SELECT value FROM catalog.settings WHERE key = 'usd_to_dkk'`);
+    const previewData = await uploads.preview(record);
+    const { result, cost_dkk, model } = await classify.classify(record, previewData,
+      { rateDkk: Number(rate || 6.9) });
+
+    await db.catalogWrite(`
+      INSERT INTO catalog.uploads
+        (upload_id, uploaded_at, uploaded_by, original_name, stored_path, mime_type,
+         size_bytes, file_kind, proposed_name, proposed_key, what_it_is, contains,
+         grain, join_key, fills_gap, gap_confidence, columns_json, caveats,
+         classifier_model, classify_cost_dkk, status)
+      VALUES (${db.esc(record.upload_id)}, now(), ${db.esc(record.uploaded_by)},
+              ${db.esc(record.original_name)}, ${db.esc(record.stored_path)},
+              ${db.esc(record.mime_type)}, ${record.size_bytes}, ${db.esc(record.file_kind)},
+              ${db.esc(result.proposed_name)}, ${db.esc(result.proposed_key)},
+              ${db.esc(result.what_it_is)}, ${db.esc(result.contains)}, ${db.esc(result.grain)},
+              ${db.esc(result.join_key)}, ${db.esc(result.fills_gap)},
+              ${db.esc(result.gap_confidence)}, ${db.esc(JSON.stringify(result.columns || []))},
+              ${db.esc(result.caveats)}, ${db.esc(model)}, ${cost_dkk},
+              ${result.usable ? "'proposed'" : "'failed'"});`);
+
+    res.json({ upload_id: record.upload_id, file_kind: record.file_kind,
+               size_bytes: record.size_bytes, cost_dkk, ...result });
+  } catch (e) {
+    console.error('[upload]', e.message);
+    uploads.remove(record.upload_id);
+    res.status(500).json({ error: e.friendly || 'Could not read that file. The error is in the server log.' });
+  }
+});
+
+app.post('/api/sources/upload/:id/decide', requireAuth, async (req, res) => {
+  const id = String(req.params.id);
+  const decision = req.body?.decision === 'confirm' ? 'confirm' : 'reject';
+
+  const [row] = await db.catalog(
+    `SELECT * FROM catalog.uploads WHERE upload_id = ${db.esc(id)}`);
+  if (!row) return res.status(404).json({ error: 'No such upload.' });
+  if (row.status !== 'proposed') {
+    return res.status(409).json({ error: `That upload is already ${row.status}.` });
+  }
+
+  if (decision === 'reject') {
+    await db.catalogWrite(`
+      UPDATE catalog.uploads SET status='rejected', decided_by=${db.esc(req.session.username)},
+        decided_at=now(), reject_reason=${db.esc(req.body?.reason || null)}
+      WHERE upload_id = ${db.esc(id)};`);
+    uploads.remove(id);
+    return res.json({ ok: true, status: 'rejected' });
+  }
+
+  // The person may correct the classifier before confirming. Their edit wins.
+  const merged = {
+    ...row,
+    decided_by: req.session.username,
+    proposed_name: req.body?.proposed_name || row.proposed_name,
+    proposed_key: req.body?.proposed_key || row.proposed_key,
+    fills_gap: req.body?.fills_gap !== undefined ? req.body.fills_gap : row.fills_gap,
+  };
+
+  try {
+    const out = await ingest.ingest(merged);
+    const reg = await ingest.register(merged, out);
+    await db.catalogWrite(`
+      UPDATE catalog.uploads SET status='ingested', decided_by=${db.esc(req.session.username)},
+        decided_at=now(), ingested_rows=${out.rows}, ingested_path=${db.esc(out.parquet)},
+        proposed_key=${db.esc('bc.' + out.table)}, fills_gap=${db.esc(merged.fills_gap)}
+      WHERE upload_id = ${db.esc(id)};`);
+    await ingest.writeRebuildScript();
+    await context.reload();   // the new source belongs in the agent's prompt
+    res.json({ ok: true, status: 'ingested', ...reg });
+  } catch (e) {
+    console.error('[ingest]', e.message);
+    await db.catalogWrite(`
+      UPDATE catalog.uploads SET status='failed', error=${db.esc(e.message)}
+      WHERE upload_id = ${db.esc(id)};`).catch(() => {});
+    res.status(500).json({ error: e.friendly || `Could not load that file: ${e.message}` });
+  }
+});
+
+app.get('/api/sources/uploads', requireAuth, async (_req, res) => {
+  try {
+    res.json(await db.catalog(`
+      SELECT upload_id, uploaded_at, uploaded_by, original_name, file_kind, size_bytes,
+             proposed_name, proposed_key, what_it_is, grain, join_key, fills_gap,
+             gap_confidence, caveats, status, ingested_rows, classify_cost_dkk, error
+      FROM catalog.uploads ORDER BY uploaded_at DESC LIMIT 50`));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Sources, Dictionary, Gaps (read-only for now; CRUD lands in phase 7) ────
 app.get('/api/sources', requireAuth, async (_req, res) => {
   try {

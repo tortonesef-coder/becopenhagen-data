@@ -711,6 +711,64 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, upload a file and the tool works out what it is
+
+Fede asked for two things that turned out to be one machine: parse the guide
+invoices, and let him drop any file on the Sources page and have a model say
+what it is and whether it fills a gap. The invoice parser is just the first
+recognised type.
+
+**The pipeline is PROPOSE then CONFIRM, and that is the whole safety story.**
+A file lands, a model reads it, and what it produces is shown to a person before
+anything reaches the warehouse. A model reading a spreadsheet header is a good
+guess, not a fact, and a good guess written silently into `catalog.sources`
+would be believed by every answer built on it afterwards.
+
+Flow: `src/uploads.js` stores the file and builds a preview (CSV and xlsx via
+DuckDB, which is the same engine that would ingest it, so anything unreadable
+fails HERE rather than after confirmation; PDFs go over whole, since Claude
+reads a PDF natively including layout and that is better than any local text
+dump). `src/classify.js` sends it with the gap catalogue and returns structured
+output. `src/ingest.js` writes Parquet, creates the table and registers it, and
+regenerates `sql/build-uploads.sql` so the table survives the hourly rebuild:
+the warehouse is dropped and recreated every hour, so an uploaded table would
+otherwise vanish at :35.
+
+**Tested against a real FareHarbor sales export**, and the classifier was better
+than expected. It identified the file, got the grain right ("one payment or
+refund event"), found the real join key (Booking ID with the leading # stripped
+matches `bc.bookings.booking_ref`), matched `history_pre_2026` at high
+confidence, and spotted the title-line trap on its own: FareHarbor puts a title
+row above the real header, so the parsed column names are junk. Cost 1.02 DKK.
+
+**The invoice parser found real problems**, which is the point of it:
+
+- **Monica's invoice has `[0.00]` in the total field**, a template placeholder
+  she never replaced. Subtotal is 20,575 DKK. She would have been paid nothing.
+- **One of Ibrahim's two files is a Donkey Republic bike rental receipt**, not
+  an invoice: 80.40 DKK, and BeCopenhagen is not named on it anywhere.
+- **Feidhlim's invoice is issued by Gleeson Translation Services** and numbered
+  1 despite the filename saying 2.
+- **There is no single guide rate.** Four guides bill 250 DKK/h; Paloma bills
+  130 and 150 DKK/h on different line types. Any model assuming one rate is
+  wrong.
+
+Every parsed row is `parsed_by` a model and `reviewed_by` NOBODY, and the
+catalog gotcha says so. 7 invoices, 2.01 DKK.
+
+**A note on what this does NOT do.** It does not close the accounting gap. Five
+of eight guides, three periods, and the hours a guide CLAIMED are not the hours
+`bc.guide_hours` computed. Comparing the two is a real check rather than an
+error, and worth doing.
+
+My test caught one thing, and it was my own sloppy expectation rather than a
+bug: I had asserted `safeTableName('../../etc')` returns a specific fallback
+string, when returning `etc` is correct (every separator is stripped, and the
+result is used as a quoted SQL identifier and a single path segment). Rewrote
+the test to assert the security PROPERTY rather than an arbitrary string.
+
+Verification is now 152 checks across eight suites.
+
 ### 2026-08-10, three corrections from Fede, two of which I had called wrong
 
 He pushed back on three of the amendment findings and was right on all three.
