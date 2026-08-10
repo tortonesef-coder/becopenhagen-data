@@ -559,9 +559,49 @@ recorded mistakes, and every question ever asked.
 | `assertions` | 16 | 6 block, 10 warn. Bounds measured, not guessed |
 | `limits` | 8 | Inferential traps, checked before any causal sentence |
 | `gaps` | 9 | The data roadmap, ranked by citation once the agent runs |
-| `query_log` | 0 | Phase 3 fills it |
+| `corrections` | 9 | **What Fede says back.** See below |
+| `query_log` | 0 | Phase 3 fills it. Kept FOREVER |
 | `statbank_tables` | 0 | Phase 6 |
-| `settings` | 1 | `query_log_retention_days = 180`, proposed, unconfirmed |
+| `settings` | 2 | Both retentions set to `forever` |
+
+### `catalog.corrections`, and why it may be the most valuable table here
+
+Fede, 2026-08-10: *"the info I provide in the chat, in response to a response,
+should be kept as valuable info, maybe it's an important correction about
+assumptions."*
+
+He is right. When someone reads an answer and replies *"no, private tours can go
+above 16 if they email us"*, that sentence is worth more than the answer was. It
+exists nowhere in FareHarbor, nowhere in the fleet database, and nowhere in this
+catalog until somebody writes it down. Before this table, every such sentence
+died when the chat window closed.
+
+Seeded with nine things Fede said across phases 0 to 2, eight already applied
+into gotchas, definitions, assertions or code. `status` tracks the loop
+(`new` to `applied`), and `verify-catalog.sh` fails if an applied correction
+does not record where it landed, so nothing can sit captured-but-ignored.
+
+From phase 3 the Ask page writes here whenever either user replies to an answer.
+
+**Retention is `forever`** for both this table and `query_log`, per the same
+instruction. The earlier 180 day proposal is withdrawn. A wrong assumption
+corrected in 2026 is still corrected in 2029.
+
+### Cost policy: build on the subscription, run on the API
+
+Fede, 2026-08-10: build-time LLM work uses his Claude Max 20x subscription (me,
+in a Claude Code session); the API key is reserved for the shipped product, the
+queries he and Søren run daily.
+
+This surfaced badly: `bootstrap-columns.js` called the API directly and drained
+the balance to zero halfway through, blocking the build. It now **refuses to
+call the API without an explicit `--api` flag**. The default path is
+`--dump` (write schema, counts and real samples to JSON, no cost) then
+`--import` (load descriptions drafted in a session). All 130 columns were
+documented this way for nothing.
+
+The rule generalises: never write a build script that spends the product's
+balance on work I could do inline.
 
 Seeds are split across four SQL files so re-running one never clobbers another:
 `catalog-schema.sql` (idempotent DDL), `catalog-seed.sql` (sources, limits,
@@ -636,6 +676,39 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 ## 9. Session log
 
 Newest entry on top.
+
+### 2026-08-10, Phase 2b: corrections are data, and a time column with two formats
+
+Fede corrected two things, both of which changed the build.
+
+**Cost.** Build work runs on his Max subscription, the API key is for the
+shipped product. `bootstrap-columns.js` had been calling the API directly and
+drained the balance to zero. Restructured to `--dump` / `--import`, with `--api`
+now opt-in and refused by default. All 130 columns are documented, at no cost,
+and the 9 tables blocked yesterday are done.
+
+**History is kept forever**, and, more interestingly, so is what he says in
+chat. That produced `catalog.corrections`, seeded with nine things he has told
+me across phases 0 to 2, eight already applied into the catalog. Section 7d
+argues why this is close to the most valuable table in the system. The 180 day
+query-log retention proposal is withdrawn.
+
+**Found while reading real samples to write the column docs:** `start_time`
+holds TWO formats in one column. The hourly scraper writes `10.00` (Danish
+locale) and the 90-second iCal sync writes `10:00`, currently 1061 rows against
+81. So `WHERE start_time = '10:00'` silently returned 7% of the departures it
+should. Normalised to `HH:MM` in `bc.departures` and `bc.rental_slots`, with
+`start_time_raw` kept for tracing. This is exactly what the clean layer is for,
+and it would never have been caught by looking at the schema: only at the values.
+
+Also recorded from the samples: `fleet_bikes.return_due` is NULL on every single
+row (a dead column, nothing should be built on it), no repair ticket has been
+logged since 2026-07-14 (the feature stopped being used, which must not be read
+as nothing breaking), `departures_recovered` mixes rentals in with tours, and
+guide names do not match team names anywhere (`Federico Tortonese` versus
+`Federico`, `Pam` versus `Paloma`), so joining on name loses guides.
+
+Verification is now 65 checks across four suites, all green.
 
 ### 2026-08-10, Phase 2: the catalog, and the July hole
 

@@ -95,8 +95,14 @@ SELECT
   COALESCE(p.product_kind, 'unknown')         AS product_kind,
   COALESCE(p.is_private, a.feed_id LIKE '%P') AS is_private,
   CAST(a.start_date AS DATE)                  AS departure_date,
-  a.start_time,
-  a.end_time,
+  -- The two writers disagree on time format and BOTH values live in this one
+  -- column: the v2 scraper formats via Danish locale and writes '10.00', iCal
+  -- writes '10:00'. As of 2026-08-10 that is 1061 dot rows against 81 colon
+  -- rows, so `WHERE start_time = '10:00'` silently returns 7% of the
+  -- departures it should. Normalised here to HH:MM, raw kept for tracing back.
+  replace(a.start_time, '.', ':')             AS start_time,
+  replace(a.end_time, '.', ':')               AS end_time,
+  a.start_time                                AS start_time_raw,
   a.guide,
   -- On a TOUR row booking_count is PEOPLE (FareHarbor customer_count), not
   -- reservations. On a rental row the same column means reservations. They are
@@ -233,7 +239,7 @@ SELECT
   feed_id                                          AS rental_code,
   TRY_CAST(REPLACE(feed_id, '-D', '') AS INTEGER)  AS rental_days,
   CAST(start_date AS DATE)                         AS pickup_date,
-  start_time,
+  replace(start_time, '.', ':')                    AS start_time,   -- see bc.departures
   booking_count                                    AS reservations,
   total_bikes,
   bikes_needed                                     AS bikes_json,

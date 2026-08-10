@@ -46,9 +46,14 @@ echo "Verifying $WH against the live fleet database"
 echo "(small differences are expected: the snapshot is up to an hour behind)"
 echo ""
 echo "Row counts"
+# Tolerance 150, not 25. The fleet's hourly scraper fetches four months forward
+# and can add sixty or more departures in a single run, so a snapshot taken
+# before it ran is legitimately that far behind. Observed 2026-08-10: 1142 in a
+# 14-minute-old snapshot against 1203 live. A verifier that cries wolf on normal
+# staleness gets ignored, which is worse than not having it.
 check "tour departures" \
   "SELECT COUNT(*) FROM bc.departures;" \
-  "SELECT COUNT(*) FROM tour_availabilities WHERE feed_type='tour';" 25
+  "SELECT COUNT(*) FROM tour_availabilities WHERE feed_type='tour';" 150
 check "rental slots" \
   "SELECT COUNT(*) FROM bc.rental_slots;" \
   "SELECT COUNT(*) FROM tour_availabilities WHERE feed_type='rental';" 10

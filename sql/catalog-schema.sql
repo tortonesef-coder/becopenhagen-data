@@ -136,11 +136,41 @@ CREATE TABLE IF NOT EXISTS catalog.query_log (
 
 CREATE SEQUENCE IF NOT EXISTS catalog.query_log_id START 1;
 
--- Retention for the query log. 180 days proposed to Fede 2026-08-10, still to
--- be confirmed. Stored here rather than in code so changing it is not a deploy.
 CREATE TABLE IF NOT EXISTS catalog.settings (
   key        VARCHAR PRIMARY KEY,
   value      VARCHAR,
   updated_at TIMESTAMP,
   updated_by VARCHAR
 );
+
+-- ── What Fede and Søren say back ────────────────────────────────────────────
+-- Fede, 2026-08-10: "the info I provide in the chat, in response to a response,
+-- should be kept as valuable info, maybe it's an important correction about
+-- assumptions."
+--
+-- He is right, and it is the highest-value table in here after gotchas. When
+-- someone reads an answer and replies "no, private tours can go above 16 if
+-- they email us", that sentence is worth more than the answer was. It is
+-- knowledge that exists nowhere in FareHarbor, nowhere in the fleet database,
+-- and nowhere in this catalog until somebody writes it down.
+--
+-- Kept FOREVER, like the query log. A correction has no expiry: a wrong
+-- assumption corrected in 2026 is still corrected in 2029.
+--
+-- The loop this closes: correction captured -> applied into gotchas, definitions
+-- or limits -> the agent stops making that mistake. status tracks where in that
+-- loop each one is, so nothing sits captured-but-ignored.
+CREATE TABLE IF NOT EXISTS catalog.corrections (
+  id             BIGINT PRIMARY KEY,
+  said_at        TIMESTAMP,
+  said_by        VARCHAR,
+  correction     TEXT,      -- what they actually said, verbatim where possible
+  context        TEXT,      -- what was being discussed, so it stays interpretable
+  query_log_id   BIGINT,    -- the answer being corrected, when there is one
+  applies_to     VARCHAR,   -- 'bc.departures' | 'definition:fill rate' | 'limit:small_n' | free text
+  status         VARCHAR DEFAULT 'new',   -- new | applied | rejected | superseded
+  applied_where  TEXT,      -- which catalog row now carries this knowledge
+  applied_at     TIMESTAMP
+);
+
+CREATE SEQUENCE IF NOT EXISTS catalog.corrections_id START 1;

@@ -107,6 +107,15 @@ check "no column description claims review it did not get" \
 check "PII columns are flagged" \
   "SELECT COUNT(*) FROM catalog.columns WHERE column_name IN ('customer_name','customer_email','customer_phone') AND NOT is_pii" "0"
 
+# A correction captured and then ignored is worse than not capturing it: it
+# looks like the knowledge is in the system when nothing acts on it.
+check "every applied correction records where it landed" \
+  "SELECT COUNT(*) FROM catalog.corrections WHERE status = 'applied' AND COALESCE(applied_where,'') = ''" "0"
+check "every correction says what it applies to" \
+  "SELECT COUNT(*) FROM catalog.corrections WHERE COALESCE(applies_to,'') = ''" "0"
+check "history is kept forever, per Fede 2026-08-10" \
+  "SELECT COUNT(*) FROM catalog.settings WHERE key IN ('query_log_retention_days','corrections_retention_days') AND value <> 'forever'" "0"
+
 echo ""
 echo "Counts"
 note "sources"            "SELECT COUNT(*) FROM catalog.sources"
@@ -117,6 +126,8 @@ note "assertions"         "SELECT COUNT(*) FROM catalog.assertions"
 note "canonical queries"  "SELECT COUNT(*) FROM catalog.canonical_queries"
 note "columns drafted"    "SELECT COUNT(*) FROM catalog.columns"
 note "columns reviewed by a human" "SELECT COUNT(*) FROM catalog.columns WHERE reviewed_by IS NOT NULL"
+note "corrections captured" "SELECT COUNT(*) FROM catalog.corrections"
+note "corrections not yet acted on" "SELECT COUNT(*) FROM catalog.corrections WHERE status = 'new'"
 
 echo ""
 echo "Outstanding"

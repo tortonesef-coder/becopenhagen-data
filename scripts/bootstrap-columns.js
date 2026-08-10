@@ -11,11 +11,30 @@
  * after any change to build-warehouse.sql and it will draft the new columns
  * while leaving anything already reviewed by a human alone.
  *
- *   node scripts/bootstrap-columns.js [--dry-run] [--table bc.departures] [--only-missing]
+ * TWO WAYS TO RUN IT, and the default is deliberately NOT the API one.
  *
- * --only-missing skips tables that already have drafts, so a run interrupted by
- * an API failure (the 2026-08-10 run stopped halfway when the Anthropic account
- * hit a zero credit balance) can be finished without paying for the work twice.
+ *   --dump <file>     Write the schema, row/null counts and value samples to a
+ *                     JSON file. No API call, no cost. This is the normal path:
+ *                     Claude Code reads the dump, writes the descriptions during
+ *                     a session on Fede's Max subscription, and imports them.
+ *   --import <file>   Load a JSON file of {table: {column: {description, gotcha}}}
+ *                     into catalog.columns.
+ *   --api             Call the Anthropic API directly instead. Costs money
+ *                     against the same balance the live product runs on, so it
+ *                     is opt-in. Useful for an unattended re-run after a schema
+ *                     change; never the default.
+ *
+ * Fede's rule, 2026-08-10: build-time LLM work runs on the Max subscription,
+ * the API key is for the shipped product. A bootstrap script that quietly spends
+ * the product's balance is paying twice, and on 2026-08-10 it drained the
+ * account to zero halfway through this very task and blocked the build.
+ *
+ *   node scripts/bootstrap-columns.js --dump /tmp/cols.json
+ *   node scripts/bootstrap-columns.js --import /tmp/cols-drafted.json
+ *   node scripts/bootstrap-columns.js --api [--only-missing] [--table bc.x]
+ *
+ * --only-missing skips tables that already have drafts, so an interrupted run
+ * can be finished without redoing the work.
  *
  * PII: customer names, emails and phone numbers are NEVER sampled or sent. Fede
  * allowed identified rows in query ANSWERS (2026-08-10), which is a different
@@ -32,10 +51,14 @@ const DUCKDB    = '/usr/local/bin/duckdb';
 const MODEL     = process.env.CATALOG_MODEL || 'claude-opus-5';
 
 const DRY_RUN = process.argv.includes('--dry-run');
-const ONLY_TABLE = (() => {
-  const i = process.argv.indexOf('--table');
+const USE_API = process.argv.includes('--api');
+const arg = (flag) => {
+  const i = process.argv.indexOf(flag);
   return i > -1 ? process.argv[i + 1] : null;
-})();
+};
+const ONLY_TABLE  = arg('--table');
+const DUMP_TO     = arg('--dump');
+const IMPORT_FROM = arg('--import');
 
 // Columns that must never be sampled or sent to the API, with the description
 // they get instead. Matched on column name across every table.
@@ -204,10 +227,90 @@ function sqlStr(v) {
   return `'${String(v).replace(/'/g, "''")}'`;
 }
 
+/** Write a column description into the catalog, never overwriting a reviewed one. */
+function upsertStatement(table, column, dataType, description, gotcha, isPii, draftedBy, sv) {
+  return `INSERT OR REPLACE INTO catalog.columns
+     (schema_name, table_name, column_name, data_type, description, gotcha,
+      sample_values, is_pii, drafted_by, reviewed_by, reviewed_at)
+   VALUES ('bc', ${sqlStr(table)}, ${sqlStr(column)}, ${sqlStr(dataType)},
+           ${sqlStr(description)}, ${sqlStr(gotcha)}, ${sqlStr(sv)},
+           ${isPii ? 'TRUE' : 'FALSE'}, ${sqlStr(draftedBy)}, NULL, NULL);`;
+}
+
 (async () => {
-  const key = apiKey();
   const tables = schema();
   if (!tables.size) { console.error('No bc.* tables found. Has the warehouse been built?'); process.exit(1); }
+
+  // ── DUMP: everything a drafter needs, and nothing that costs money ────────
+  if (DUMP_TO) {
+    const out = { context: CONTEXT, tables: {} };
+    for (const [table, columns] of tables) {
+      out.tables[table] = columns.map(c => ({
+        column: c.column_name,
+        type: c.data_type,
+        ...nullStats(table, c.column_name),
+        samples: samples(table, c.column_name),
+        is_pii: Object.prototype.hasOwnProperty.call(PII_COLUMNS, c.column_name),
+      }));
+    }
+    fs.writeFileSync(DUMP_TO, JSON.stringify(out, null, 1));
+    const n = Object.values(out.tables).reduce((a, c) => a + c.length, 0);
+    console.log(`Dumped ${Object.keys(out.tables).length} tables, ${n} columns to ${DUMP_TO}`);
+    console.log('Draft descriptions for these, then: --import <file>');
+    return;
+  }
+
+  // ── IMPORT: load drafts written elsewhere ─────────────────────────────────
+  if (IMPORT_FROM) {
+    const drafts = JSON.parse(fs.readFileSync(IMPORT_FROM, 'utf8'));
+    const reviewedRows = new Set(
+      duckJson(CATALOG, `SELECT table_name || '.' || column_name AS k
+                         FROM catalog.columns WHERE reviewed_by IS NOT NULL`).map(r => r.k)
+    );
+    const statements = [];
+    let skipped = 0;
+    for (const [table, columns] of tables) {
+      const t = drafts[table] || drafts[`bc.${table}`];
+      if (!t) continue;
+      for (const c of columns) {
+        const name = c.column_name;
+        if (reviewedRows.has(`${table}.${name}`)) { skipped++; continue; }
+        const isPii = Object.prototype.hasOwnProperty.call(PII_COLUMNS, name);
+        const d = t[name] || {};
+        if (!isPii && !d.description) continue;
+        statements.push(upsertStatement(
+          table, name, c.data_type,
+          isPii ? PII_COLUMNS[name] : d.description,
+          isPii ? 'Personal data. Aggregate by default; only surface for a question explicitly about one identified customer.' : (d.gotcha || null),
+          isPii,
+          isPii ? 'hand-written (PII)' : (drafts._drafted_by || 'claude-code (Max subscription)'),
+          isPii ? '(redacted)' : samples(table, name).slice(0, 8).join(' | ')
+        ));
+      }
+    }
+    if (!statements.length) { console.log('Nothing to import.'); return; }
+    if (DRY_RUN) { console.log(`Dry run: ${statements.length} column(s) would be written.`); return; }
+    execFileSync(DUCKDB, [CATALOG, '-c', statements.join('\n')], { encoding: 'utf8' });
+    console.log(`Imported ${statements.length} column description(s), all reviewed_by = NULL.`);
+    if (skipped) console.log(`Skipped ${skipped} already reviewed by a human.`);
+    return;
+  }
+
+  if (!USE_API) {
+    console.error(`Refusing to call the Anthropic API without --api.
+
+Build-time LLM work runs on the Max subscription, not the product's API balance
+(Fede, 2026-08-10). The normal path is:
+
+  node scripts/bootstrap-columns.js --dump /tmp/cols.json
+  ... draft the descriptions in a Claude Code session ...
+  node scripts/bootstrap-columns.js --import /tmp/cols-drafted.json
+
+Pass --api only for an unattended re-run you have decided to pay for.`);
+    process.exit(1);
+  }
+
+  const key = apiKey();
 
   console.log(`Drafting column descriptions with ${MODEL} over ${tables.size} tables${DRY_RUN ? ' (dry run)' : ''}\n`);
 
