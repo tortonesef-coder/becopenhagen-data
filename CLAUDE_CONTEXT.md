@@ -712,6 +712,46 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-10, cost work deferred, leanness is the standing principle
+
+Fede, after the model benchmark and the caching question: *"Okay let's forget
+about cost for a bit, we'll get back to it in the future; But let's keep things
+lean and efficient yeah"*.
+
+**Deferred, not abandoned.** Two pieces of cost work are specified and ready
+whenever he raises it again:
+
+1. **Cache warming on a schedule.** There is no permanent cache: the maximum TTL
+   is one hour and the app already uses it. Keeping the ~29k-token briefing
+   permanently warm costs about 0.10 DKK per hourly touch, roughly 72 DKK a
+   month, against about 2 DKK to rebuild it cold. That only pays off above
+   roughly one cold start per day, so it is a LATENCY buy, not a cost saving:
+   warming just before he works turns a 40 second first question into 20.
+   Caveat: every catalog change rebuilds the briefing and voids the cache, so
+   warming while he works the Doubts queue would be burning money.
+2. **A measured diet for the briefing.** It is 89k characters and grows every
+   time something is added; corrections alone are 6k and accumulate forever.
+   Measure which blocks earn their place before cutting, having already learned
+   tonight that cutting by size rather than by frequency made it worse.
+
+**Model: staying on Opus 5.** Fede: "I am not surprised Opus 5 is better."
+Sonnet matched it on every trap but trusted a canonical query where Opus
+questioned it and found the rental-span bug. At a handful of questions a day the
+difference is a few kroner.
+
+**The standing principle, which outlives the cost question:** lean and
+efficient, and specifically **never hand him a queue he has to work through**.
+The evening's biggest mistake was enumerating the catalog into 244 review cards.
+Work should arise from something he actually did: a question he asked, a file he
+uploaded, a job that produced an uncertain result. Anything checkable against
+the data gets checked against the data.
+
+Applied immediately: `sql/` had four spent one-off migrations sitting beside the
+four files that run on every hourly build, with nothing marking which was which.
+Moved to `sql/applied/` with a README, because a directory where nobody can tell
+what runs is a directory nobody trusts. The migrations are kept rather than
+deleted: each carries why it was needed, and that reasoning exists nowhere else.
+
 ### 2026-08-10, the benchmark found a warehouse bug, and the API limit was hit
 
 Full six-question run, three models. **Opus and Sonnet completed all six; Haiku
