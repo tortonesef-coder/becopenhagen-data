@@ -712,6 +712,41 @@ after ANY change to the SQL or the catalog. All green as of 2026-08-10.
 
 Newest entry on top.
 
+### 2026-08-11, the curator asked "is it reachable" when it should have asked "should it be"
+
+Fede opened the Curator tab and hit a card offering to make `catalog.uploads`
+queryable: one row, about a file upload, presented as a decision. Noise, and the
+same mistake as the Doubts queue in a new place.
+
+The check asked only whether a populated source was missing from the warehouse.
+It should have asked whether the source is about **the business** or about
+**the tool**. `catalog.doubts` and `catalog.uploads` are the tool's own
+bookkeeping: making them queryable would let the Ask page answer questions about
+itself, while adding tables to the schema block that every real question pays
+for. Both are now `layer = 'internal'` and the curator skips them.
+
+Marked in the data rather than hardcoded in the script on purpose: a new
+bookkeeping table is then excluded by SAYING WHAT IT IS, not by someone
+remembering to edit curator.js.
+
+**The third card was right, and was still mine to resolve.** It flagged that the
+`pickup_curve` gap names `bc.booking_pace`, which exists. That is checkable
+against the data, so under the rule set the previous evening it should never
+have been a card for Fede at all. Checked it: T-7 and T-14 ARE computable, and
+over the 57 departures where passenger counts are reliable, **22.5% of final
+seats were sold by T-7 and 18.1% by T-14 — most seats sell inside the final
+week.** T-30 genuinely remains missing, because the change-log archive starts
+2026-07-07 and is younger than 30 days for most departures. The gap moved to
+partial and now carries the measured numbers; it will fill in by itself as the
+archive ages, with nothing to buy or chase.
+
+The Curator tab is now empty, which is the honest state.
+
+**The rule this sharpens:** the curator finds MAINTENANCE work, and most
+maintenance is mine. A card belongs in front of Fede only when the answer is a
+business judgement. "Is this gap stale?" is a data question; "should these two
+sources be merged?" is his.
+
 ### 2026-08-10, cost work deferred, leanness is the standing principle
 
 Fede, after the model benchmark and the caching question: *"Okay let's forget

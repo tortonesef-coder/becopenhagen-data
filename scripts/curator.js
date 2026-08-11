@@ -35,7 +35,7 @@ const add = p => proposals.push(p);
 
 (async () => {
   const sources = await db.catalog(
-    `SELECT source_key, display_name, description, grain, last_row_count FROM catalog.sources`);
+    `SELECT source_key, display_name, description, grain, last_row_count, layer FROM catalog.sources`);
   const usage = await db.catalog(`
     SELECT source_key, COUNT(*) AS uses,
            COUNT(*) FILTER (WHERE level IN ('load_bearing','decisive')) AS mattered,
@@ -72,6 +72,20 @@ const add = p => proposals.push(p);
     const bcName = 'bc.' + key.split('.').pop();
     if (key.startsWith('bc.') || inWarehouse.has(bcName)) continue;
     if (!key.startsWith('catalog.')) continue;
+
+    // THE QUESTION IS NOT "is it reachable", IT IS "should it be".
+    //
+    // The first version asked only whether a populated source was missing from
+    // the warehouse, and so proposed copying catalog.doubts and catalog.uploads
+    // across. Both are the tool's own bookkeeping. Making them queryable would
+    // let the Ask page answer questions about ITSELF, while adding tables to the
+    // schema block that every real question then pays for.
+    //
+    // Fede saw the catalog.uploads card and it was noise: one row, about a file
+    // upload, offered as a decision. Marked layer=internal instead of hardcoding
+    // table names here, so a new bookkeeping table is excluded by saying what it
+    // is rather than by someone remembering to edit this file.
+    if (s.layer === 'internal') continue;
 
     // Only worth raising if it actually holds something.
     let rows = 0;
