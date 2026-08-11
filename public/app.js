@@ -657,20 +657,45 @@ function buildDropZone() {
 
 async function sendUpload(file, box) {
   const status = el('div', 'upload-status');
-  status.textContent = `Reading ${file.name}...`;
+  const mb = (file.size / 1048576).toFixed(1);
+  status.textContent = `Reading ${file.name} (${mb} MB)...`;
   box.appendChild(status);
+
+  // A wide export takes MINUTES, and the old message never changed, so it read
+  // as a hang. Measured on real FareHarbor exports: an 83 column file takes
+  // about three minutes end to end. Saying so beats a spinner that looks broken.
+  const started = Date.now();
+  const tick = setInterval(() => {
+    const s = Math.round((Date.now() - started) / 1000);
+    status.textContent = `Reading ${file.name} (${mb} MB)... ${s}s. ` +
+      (s > 45 ? 'Wide files take a few minutes; it has not stalled.' : '');
+  }, 5000);
 
   const fd = new FormData();
   fd.append('file', file);
   try {
     const res = await fetch('/api/sources/upload', { method: 'POST', body: fd });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    if (!res.ok) {
+      const err = new Error(data.error || 'Upload failed');
+      err.detail = data.detail;
+      throw err;
+    }
+    clearInterval(tick);
     status.remove();
     box.parentElement.insertBefore(proposalCard(data), box.nextSibling);
   } catch (e) {
+    clearInterval(tick);
     status.className = 'upload-status error';
     status.textContent = e.message;
+    // Show the underlying cause too. Without it the only record of what broke
+    // is a server log Fede has no way to read.
+    if (e.detail) {
+      const d = el('div', 'muted small');
+      d.style.marginTop = '.35rem';
+      d.textContent = e.detail;
+      status.appendChild(d);
+    }
   }
 }
 

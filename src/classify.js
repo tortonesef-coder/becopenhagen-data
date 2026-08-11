@@ -187,7 +187,12 @@ async function classify(record, previewData, { rateDkk = 6.9 } = {}) {
     headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 6000,
+      // 16k, not 6k. On Opus 5 thinking is ON BY DEFAULT and shares this
+      // budget with the answer, so a file that provokes a lot of thinking can
+      // exhaust it before the JSON is finished and arrive as a truncated or
+      // empty reply. Output tokens are billed for what is produced, not for the
+      // ceiling, so a generous cap costs nothing and removes a whole failure mode.
+      max_tokens: 16000,
       system: [{ type: 'text', text: INSTRUCTIONS }, { type: 'text', text: context }],
       // Structured output, so the shape is enforced by the API rather than
       // parsed hopefully out of prose.
@@ -207,11 +212,41 @@ async function classify(record, previewData, { rateDkk = 6.9 } = {}) {
 
   const body = await res.json();
   const text = (body.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+
+  // SAY WHAT ACTUALLY HAPPENED. This used to throw "the classifier returned
+  // something that was not valid JSON", which is true of every failure here and
+  // useful for none of them: Fede hit it on a 5 MB CSV and there was no way to
+  // tell truncation from a refusal from an empty reply. A 200 with unparseable
+  // text has three distinct causes and they need three distinct messages.
+  const stop = body.stop_reason;
+  const outTokens = body.usage?.output_tokens ?? 0;
+
+  if (stop === 'max_tokens') {
+    const err = new Error(`Classifier hit the token ceiling (stop_reason=max_tokens, ${outTokens} output tokens). The reply was cut off mid-JSON.`);
+    err.friendly = 'That file was too complicated to describe in one go, so the reading was cut off. This is a bug on my side, not a problem with your file. Tell Claude and it will raise the limit.';
+    throw err;
+  }
+  if (stop === 'refusal') {
+    const err = new Error(`Classifier refused: ${JSON.stringify(body.stop_details || {})}`);
+    err.friendly = 'The model declined to read that file. If it is an ordinary business file this is a false alarm worth reporting.';
+    throw err;
+  }
+  if (!text.trim()) {
+    const err = new Error(`Classifier returned no text at all (stop_reason=${stop}, ${outTokens} output tokens, block types: ${(body.content || []).map(b => b.type).join(',') || 'none'}).`);
+    err.friendly = 'The model read the file but sent nothing back. Worth retrying once; if it happens again it is a bug.';
+    throw err;
+  }
+
   let result;
   try {
     result = JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim());
   } catch (e) {
-    throw new Error('The classifier returned something that was not valid JSON.');
+    // Keep the evidence in the log: the tail is where a truncation shows.
+    const err = new Error(
+      `Classifier reply did not parse (stop_reason=${stop}, ${outTokens} output tokens, ${text.length} chars). ` +
+      `Ends with: ${JSON.stringify(text.slice(-160))}`);
+    err.friendly = 'The model\'s description of that file came back malformed. The details are in the server log.';
+    throw err;
   }
 
   const usage = body.usage || {};

@@ -205,9 +205,34 @@ app.post('/api/sources/upload', requireAuth, upload.single('file'), async (req, 
     res.json({ upload_id: record.upload_id, file_kind: record.file_kind,
                size_bytes: record.size_bytes, cost_dkk, ...result });
   } catch (e) {
+    // KEEP THE FILE AND RECORD THE FAILURE.
+    //
+    // This used to delete the upload and write nothing, so a failure left no
+    // file to retry, no row to inspect, and one line in a log that rotates.
+    // Fede uploaded a 5 MB CSV, it failed, and there was nothing left to
+    // diagnose it with. A system that discards the evidence of its own failures
+    // cannot be debugged by the person who hit them.
+    //
+    // The file stays on disk (he can retry without re-uploading) and the row
+    // says what went wrong (so the next person can see it without shell access).
     console.error('[upload]', e.message);
-    uploads.remove(record.upload_id);
-    res.status(500).json({ error: e.friendly || 'Could not read that file. The error is in the server log.' });
+    try {
+      await db.catalogWrite(`
+        INSERT OR REPLACE INTO catalog.uploads
+          (upload_id, uploaded_at, uploaded_by, original_name, stored_path, mime_type,
+           size_bytes, file_kind, status, error)
+        VALUES (${db.esc(record.upload_id)}, now(), ${db.esc(record.uploaded_by)},
+                ${db.esc(record.original_name)}, ${db.esc(record.stored_path)},
+                ${db.esc(record.mime_type)}, ${record.size_bytes}, ${db.esc(record.file_kind)},
+                'failed', ${db.esc(String(e.message).slice(0, 2000))});`);
+    } catch (logErr) {
+      console.error('[upload] could not even record the failure:', logErr.message);
+    }
+    res.status(500).json({
+      error: e.friendly || 'Could not read that file. The details are in the server log.',
+      upload_id: record.upload_id,
+      detail: String(e.message).slice(0, 400),
+    });
   }
 });
 
