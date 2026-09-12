@@ -6,4 +6,4 @@
 
 CREATE SCHEMA IF NOT EXISTS bc;
 
--- No uploads ingested yet.
+CREATE OR REPLACE TABLE bc."fh_sales_history" AS SELECT * FROM read_parquet('/var/lib/bc-data/raw/fh_sales_history/up_07d81dc615f7c69d07.parquet');
