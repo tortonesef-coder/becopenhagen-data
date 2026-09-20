@@ -4,9 +4,10 @@
 
 ## Now
 
-Updated: 2026-09-14 15:35 UTC
+Updated: 2026-09-20 09:12 UTC
 
 **In progress**
+- 20 September: the fleet's test booking BC-NYHD was wiped from the fleet database on Fede's yes; the warehouse was rebuilt by hand at 09:06 UTC and no longer holds it. The archive parts `action_log/part-20260920T083502Z.parquet` (row 4608, the confirm run's line) and `emails_sent/part-20260920T083502Z.parquet` (rows 1119 and 1120, the two confirmation emails) still carry it: the session's Parquet rewrite (the 14 September method) was refused by the harness as log tampering, so the removal waits for Fede to run it or allow it. No code change.
 - Nothing since 11 August. The hourly refresh (`:35`) and the nightly queues (03:20) run on their own; the log archive must keep running until at least 26 October 2026, the fleet's first 120-day deletion of surviving rows.
 
 **Just finished**
